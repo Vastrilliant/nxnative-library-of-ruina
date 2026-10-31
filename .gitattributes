@@ -2,3 +2,4 @@
 # conflict in its gallery, run docs_gallery.py. test_docs fails on a game in the table twice
 docs/images/gallery.tsv merge=union
 dm/games/** export-ignore
+docs/images/** export-ignore
