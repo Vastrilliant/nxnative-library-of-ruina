@@ -11,6 +11,10 @@ on:
         description: "Extra build_ipa_from_nsp.py options, e.g. --romfs separate  or  -p v0"
         required: false
         type: string
+      mods:
+        description: "Mods to build in, comma-separated, from mods/ (e.g. speed-dice). Empty = none"
+        required: false
+        type: string
       romfs_mode:
         description: "separate = leave the game files out of the IPA (copy your own romfs.img to the phone); bundle = pack them in"
         required: true
@@ -268,6 +272,12 @@ jobs:
           restore-keys: |
             nxshader-v1-${{ steps.links.outputs.hash }}-
 
+      - name: Apply mods
+        if: ${{ inputs.mods != '' }}
+        env:
+          MODS: ${{ inputs.mods }}
+        run: python3 scripts/apply_mods.py --mods "$MODS" --out "$HOME/mods"
+
       - name: Build IPA
         env:
           APP_NAME: ${{ inputs.app_name }}
@@ -334,6 +344,15 @@ jobs:
           name: nxnative-ipa
           path: ${{ env.OUT_FILE }}
           compression-level: 0
+          retention-days: 3
+
+      - name: Mod files for the RomFS overlay
+        if: ${{ success() && inputs.mods != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mod-romfs
+          path: ~/mods/romfs
+          if-no-files-found: ignore
           retention-days: 3
 
       - name: Logs on failure

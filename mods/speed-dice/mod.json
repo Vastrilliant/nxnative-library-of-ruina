@@ -1,0 +1,49 @@
+{
+  "id": "speed-dice",
+  "title": "Speed dice recolour (Library of Ruina)",
+  "description": "Port of the Switch plugin from Library-of-Ruina-CustomDice-NX-Mod: per-floor / per-story speed-dice sprites and colours, the infinity die. Needs the mod's PNGs in the romfs overlay.",
+  "game": "Library of Ruina 1.0.3",
+  "gates": [
+    "stage_pre",
+    "dice_init_post",
+    "dice_sprite_post",
+    "card_phase_pre"
+  ],
+  "host": "host.c",
+  "romfs": "romfs",
+  "obs": {
+    "_comment": "main build ID (first 16 bytes of the module ID, 32 hex digits) -> rows {gate, offset, word, reason}; word = the 4 bytes at offset read as a little-endian u32. Rows found with dump.cs/script.json RVAs and the DmIOS binary (main = RVA + 0x230000 in its file).",
+    "aeea627ddbd1214764dfef5f965e94a2": [
+      {
+        "gate": "stage_pre",
+        "offset": "0x1cfaad0",
+        "word": "a9bc7bfd",
+        "reason": "StageController.InitCommon entry: x0 = the StageController"
+      },
+      {
+        "gate": "stage_pre",
+        "offset": "0x1cfbf10",
+        "word": "d10283ff",
+        "reason": "StageController.StartBattle entry: x0 = the StageController"
+      },
+      {
+        "gate": "card_phase_pre",
+        "offset": "0x1d06410",
+        "word": "39439c08",
+        "reason": "StageController.ApplyLibrarianCardPhase entry (a 11-instruction leaf with no later safe point, so before the original, not after): x0 = the StageController"
+      },
+      {
+        "gate": "dice_init_post",
+        "offset": "0x233bba4",
+        "word": "aa1703e0",
+        "reason": "after the only call of SpeedDiceUI.Init (bl 0x233bf20 at 0x233bba0): x23 = the SpeedDiceUI, w27 = faction"
+      },
+      {
+        "gate": "dice_sprite_post",
+        "offset": "0x233b914",
+        "word": "a9424ff4",
+        "reason": "SpeedDiceUI.ChangeSprite, value >= 999 path (b.ge 0x233b8e0), before its epilogue and tail call: x19 = the SpeedDiceUI, w20 = value"
+      }
+    ]
+  }
+}

@@ -111,6 +111,14 @@ def load_patches():
                 table[bid], where[kind, bid] = v, path
     return tables, where
 PATCHES, PATCH_WHERE = load_patches()
+# Gates of the mods the build selected (scripts/apply_mods.py writes DM_MODS_PATCHES: {"OBS": {build ID: [[offset, number, original word as 8 hex digits, reason], ...]}}). They are added
+# to the build's own OBS rows, so a mod never has to claim a build ID the profile's patches.py already has
+_MODS_PATCHES = os.environ.get('DM_MODS_PATCHES')
+if _MODS_PATCHES:
+    import json
+    with open(_MODS_PATCHES, encoding='utf-8') as _f:
+        for _bid, _rows in json.load(_f).get('OBS', {}).items():
+            PATCHES['OBS'].setdefault(_bid, []).extend((int(r[0]), int(r[1]), str(r[2]), str(r[3])) for r in _rows)
 BUILD_ID = MOD.build_id[:0x10].hex()
 cuts = list(PATCHES['CUTS'].get(BUILD_ID, []))
 if BUILD_ID not in PATCHES['CUTS']:
