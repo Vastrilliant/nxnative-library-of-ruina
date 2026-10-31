@@ -1,6 +1,8 @@
 // Virtual gamepad (Nintendo button positions) + physical controllers (GameController), handed to the host through dm_input_set and dm_pad_set_player (hle_hid.c, bit layout in dm_input.h).
-//   Two layouts, three in handheld mode; one tap on the layout button at the top centre (labelled with the current layout, "2D" / "3D" / "Tap") goes to the next, and the choice is kept in NSUserDefaults (each game is its own app, so per game); the first launch uses the game profile's pad_layout (DM_GAME_PAD_LAYOUT).
+//   Three layouts, four in handheld mode; one tap on the layout button at the top centre (labelled with the current layout, "2D" / "3D" / "Tap" / "Swipe") goes to the next, and the choice is kept in NSUserDefaults (each game is its own app, so per game); the first launch uses the game profile's pad_layout (DM_GAME_PAD_LAYOUT).
 //   Tap (touch): no control but the layout button, every other touch goes to the game's touch screen; offered only while the game is in handheld mode, the only one in which it reads the touch screen (Balatro, played by touch).
+//   Swipe: the swipe gamepad of GesturePad.swift over the whole screen (swipes are the D-pad, a tap is A, a hold is B; L, R, ZL, ZR, X, Y, − and + are outlined buttons, with toggles for the right stick and for repeating swipes),
+//     placed by the launcher's layout editor (Launcher.swift, GestureLayoutEditor.swift); only the layout button stays here. It presses through dm_gesture_button / dm_gesture_stick, below.
 //   2D (simple): top corners ZL above L (one column), ZR above R likewise, teardrops with the tip toward the screen corner; − and + side by side at the top centre; the left stick in the bottom-left corner (fixed ring, tilt measured from the ring centre, small dead zone);
 //     the A (right) B (bottom) X (top) Y (left) diamond in the bottom-right corner, sliding a finger between keys switches keys. Each bottom corner holds a single control, so it sits close in (reaching halfway into the side safe-area inset).
 //   3D (full, Pro Controller style): everything in 2D (left stick and diamond keep their place and size), plus a D-pad (inward of and below the left stick, 8-way), a right stick that is not drawn
@@ -27,6 +29,7 @@
 #include "motion_fusion.h"
 #include "pad_apple.h"
 #include "pad_slots.h"
+#include "DmGesture.h"
 #include <stdatomic.h>
 
 enum { B_A = 0, B_B, B_X, B_Y, B_LS, B_RS, B_L, B_R, B_ZL, B_ZR, B_PLUS, B_MINUS, B_LEFT, B_UP, B_RIGHT, B_DOWN, B_N };
@@ -35,10 +38,23 @@ enum { C_NONE = 0, C_STICK, C_DPAD, C_FACE, C_BTN, C_SWAP, C_GAME };   // which 
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t g_touch_btn, g_shake_btn;
 static int32_t g_touch_lx, g_touch_ly, g_touch_rx, g_touch_ry;
+static uint64_t g_gesture_btn;   // the Swipe layout's buttons and right stick (GesturePad.swift), kept apart from the other layouts' so neither can release the other's
+static int32_t g_gesture_rx, g_gesture_ry;
 static void publish(void) {   // the touch gamepad and the shake; the host ORs them with player 1's controller and takes whichever stick is deflected more (hle_hid.c)
     pthread_mutex_lock(&g_mu);
-    dm_input_set(g_touch_btn | g_shake_btn, g_touch_lx, g_touch_ly, g_touch_rx, g_touch_ry);
+    BOOL swipeStick = g_gesture_rx || g_gesture_ry;   // only the Swipe layout is up while it is held: the other layouts' touches are not read then
+    dm_input_set(g_touch_btn | g_shake_btn | g_gesture_btn, g_touch_lx, g_touch_ly, swipeStick ? g_gesture_rx : g_touch_rx, swipeStick ? g_gesture_ry : g_touch_ry);
     pthread_mutex_unlock(&g_mu);
+}
+void dm_gesture_button(uint64_t mask, int pressed) {
+    pthread_mutex_lock(&g_mu);
+    if (pressed) g_gesture_btn |= mask; else g_gesture_btn &= ~mask;
+    pthread_mutex_unlock(&g_mu);
+    publish();
+}
+void dm_gesture_stick(int32_t x, int32_t y) {
+    pthread_mutex_lock(&g_mu); g_gesture_rx = x; g_gesture_ry = y; pthread_mutex_unlock(&g_mu);
+    publish();
 }
 
 // ---- Shaking the phone ----
@@ -126,8 +142,11 @@ static const CGFloat
     K_RSWIPE = 1.0 / 3,                             // right stick area: this fraction of the screen width from the right edge (not in u)
     K_CLICK_X = 102, K_CLICK_R = 17;                // L3 / R3: centre from the outer edge (level with ZL / ZR), radius
 static const int k_btns[] = {B_ZL, B_L, B_ZR, B_R, B_MINUS, B_PLUS, B_LS, B_RS};   // keys locked at touch-down (L3 / R3 only in the 3D layout)
-static NSString *const k_layout_key = @"DmPadLayout";   // NSUserDefaults: 0 = 2D, 1 = 3D, 2 = Tap (DM_GAME_PAD_LAYOUT's numbers)
+static NSString *const k_layout_key = @"DmPadLayout";   // NSUserDefaults: 0 = 2D, 1 = 3D, 2 = Tap (DM_GAME_PAD_LAYOUT's numbers), 3 = Swipe (a choice of the player's only)
 int dm_opmode(void);   // hle_oe.c: 0 = handheld
+void *dm_gesture_view_make(void);   // GesturePad.swift: the Swipe layout's view, returned retained
+void dm_gesture_view_release_inputs(void *view);   // lets go of every button and the stick it holds
+void dm_gesture_view_set_passthrough(void *view, CGRect rect);   // touches inside rect go to the views below (the layout button)
 
 @interface DmGamepad : UIView
 @end
@@ -146,7 +165,8 @@ static void pads_start(void);   // Physical controllers, below
     UIImpactFeedbackGenerator *_touchFeedback;       // one short feedback per touch-control press edge
     unsigned _hapticSticks;
     BOOL _stickShown;                              // the left stick was held at the last refresh
-    BOOL _full, _tap;                              // the 3D layout / the Tap layout is current
+    BOOL _full, _tap, _gesture;                    // the 3D layout / the Tap layout / the Swipe layout is current
+    UIView *_gestureView;                          // the Swipe layout's view over the whole pad, made while that layout is current
     CALayer *_controls;                            // holds every control layer: hidden while a physical controller is connected (the view itself stays, for game touches)
     BOOL _padOff;                                  // a physical controller is connected: every touch goes to the game
     UITouch *_game[16];                            // touches on the game's touch screen by finger slot
@@ -195,7 +215,7 @@ static BOOL fullOnly(int b) { return b == B_LS || b == B_RS || b >= B_LEFT; }   
         NSNumber *saved = [NSUserDefaults.standardUserDefaults objectForKey:k_layout_key];
         int l = saved ? (int)saved.integerValue : DM_GAME_PAD_LAYOUT;
         if (l == 2 && dm_opmode() != 0) l = 0;   // Tap only in handheld mode (env.txt's DM_OPMODE may have changed it)
-        _full = l == 1; _tap = l == 2;
+        _full = l == 1; _tap = l == 2; _gesture = l == 3;
         [self applyLayout];
         NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
         [nc addObserver:self selector:@selector(padsChanged:) name:GCControllerDidConnectNotification object:nil];
@@ -209,15 +229,24 @@ static BOOL fullOnly(int b) { return b == B_LS || b == B_RS || b >= B_LEFT; }   
 }
 - (void)applyLayout {   // show / hide the controls for the current layout
     [CATransaction begin]; [CATransaction setDisableActions:YES];
-    for (int b = 0; b < B_N; b++) _key[b].hidden = _tap || (fullOnly(b) && !_full);
-    _ring.hidden = _knob.hidden = _tap;
-    _swapLabel.string = _tap ? @"Tap" : _full ? @"3D" : @"2D";
+    for (int b = 0; b < B_N; b++) _key[b].hidden = _tap || _gesture || (fullOnly(b) && !_full);
+    _ring.hidden = _knob.hidden = _tap || _gesture;
+    _swapLabel.string = _gesture ? @"Swipe" : _tap ? @"Tap" : _full ? @"3D" : @"2D";
     [CATransaction commit];
+    if (_gesture && !_gestureView) {
+        _gestureView = (__bridge_transfer UIView *)dm_gesture_view_make();
+        _gestureView.frame = self.bounds; _gestureView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        [self addSubview:_gestureView];
+    } else if (!_gesture && _gestureView) {
+        dm_gesture_view_release_inputs((__bridge void *)_gestureView);
+        [_gestureView removeFromSuperview]; _gestureView = nil;
+    }
+    _gestureView.hidden = _padOff; _gestureView.userInteractionEnabled = !_padOff;
 }
-- (void)nextLayout {   // 2D → 3D (→ Tap in handheld mode) → 2D: release every touch first (no key stays held), save, lay out again
-    int l = _tap ? 0 : _full ? (dm_opmode() == 0 ? 2 : 0) : 1;
+- (void)nextLayout {   // 2D → 3D (→ Tap in handheld mode) → Swipe → 2D: release every touch first (no key stays held), save, lay out again
+    int l = _gesture ? 0 : _tap ? 3 : _full ? (dm_opmode() == 0 ? 2 : 3) : 1;
     [self reset];
-    _full = l == 1; _tap = l == 2;
+    _full = l == 1; _tap = l == 2; _gesture = l == 3;
     [NSUserDefaults.standardUserDefaults setObject:@(l) forKey:k_layout_key];
     [self applyLayout]; [self setNeedsLayout];
 }
@@ -336,7 +365,9 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
     BOOL game = NO;
     for (UITouch *t in ts) {
         if (_padOff) { game |= [self gameBegin:t]; continue; }
-        CGPoint p = [t locationInView:self]; int hit = _tap ? -1 : [self btnAt:p];
+        CGPoint p = [t locationInView:self];
+        if (_gesture) { if ([self inSwap:p]) [_owner setObject:@(C_SWAP) forKey:t]; continue; }   // the layout button is all that is left here; the view over the pad takes the rest
+        int hit = _tap ? -1 : [self btnAt:p];
         if (hit >= 0) { [_owner setObject:@(C_BTN | (uint64_t)hit << 8) forKey:t]; continue; }
         if ([self inSwap:p]) { [_owner setObject:@(C_SWAP) forKey:t]; continue; }
         if (_tap) { game |= [self gameBegin:t]; continue; }
@@ -381,7 +412,7 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
 }
 - (void)touchesEnded:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e { [self endTouches:ts tapped:YES]; }
 - (void)touchesCancelled:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e { [self endTouches:ts tapped:NO]; }
-- (void)reset { [_owner removeAllObjects]; [_faceOf removeAllObjects]; _stick[0] = _stick[1] = nil; for (int i = 0; i < 16; i++) _game[i] = nil; [self pushGame]; [self recompute]; }
+- (void)reset { if (_gestureView) dm_gesture_view_release_inputs((__bridge void *)_gestureView); [_owner removeAllObjects]; [_faceOf removeAllObjects]; _stick[0] = _stick[1] = nil; for (int i = 0; i < 16; i++) _game[i] = nil; [self pushGame]; [self recompute]; }
 
 // ---- Shapes ----
 static CGPathRef circlePath(CGPoint c, CGFloat r) { return CGPathCreateWithEllipseInRect(CGRectMake(c.x - r, c.y - r, 2 * r, 2 * r), NULL); }
@@ -433,7 +464,8 @@ static void placeLabel(CATextLayer *t, CGPoint c, CGFloat fs) {
     }
     static const struct { int b; CGFloat angle; } arms[] = {{B_UP, 0}, {B_RIGHT, M_PI_2}, {B_DOWN, M_PI}, {B_LEFT, -M_PI_2}};   // the same arm in 90° steps
     for (int i = 0; i < 4; i++) setPath(_key[arms[i].b], armPath(self.dpadCenter, self.dpadR, K_ARM_W * u, K_ARM_IN * u, arms[i].angle, 6 * u));
-    CGPoint sc = self.swapCenter; setPath(_swap, circlePath(sc, K_SWAP_R * u)); placeLabel(_swapLabel, sc, 12 * u);
+    CGPoint sc = self.swapCenter; setPath(_swap, circlePath(sc, K_SWAP_R * u)); placeLabel(_swapLabel, sc, (_gesture ? 8.5 : 12) * u);   // "Swipe" is longer than the others
+    if (_gestureView) { CGFloat r = K_SWAP_R * u * 1.6; dm_gesture_view_set_passthrough((__bridge void *)_gestureView, CGRectMake(sc.x - r, sc.y - r, 2 * r, 2 * r)); }   // the layout button's grab area, as inSwap: takes it
     setPath(_ring, circlePath(self.stickHome, [self stickR:0]));
     CGFloat k = K_KNOB_R * u; _knob.bounds = CGRectMake(0, 0, 2 * k, 2 * k);
     setPath(_knob, circlePath(CGPointMake(k, k), k));
@@ -524,7 +556,7 @@ static BOOL pads_slotted(GCController *gone) {
     GCController *c = note.object, *gone = [note.name isEqual:GCControllerDidDisconnectNotification] ? c : nil;
     if (c && (!c.extendedGamepad || g_merge)) LOG("controller %s: %s%s", gone ? "disconnected" : "connected", pad_name(c), c.extendedGamepad ? "" : " (no extended gamepad profile: not used)");
     BOOL any = g_merge ? pads_merged(gone) : pads_slotted(gone);
-    dispatch_async(dispatch_get_main_queue(), ^{ self->_padOff = any; self->_controls.hidden = any; [self reset]; });   // the touch gamepad hides while any controller is in use
+    dispatch_async(dispatch_get_main_queue(), ^{ self->_padOff = any; self->_controls.hidden = any; self->_gestureView.hidden = any; self->_gestureView.userInteractionEnabled = !any; [self reset]; });   // the touch gamepad hides while any controller is in use
 }
 @end
 

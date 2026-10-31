@@ -95,6 +95,18 @@ private struct LauncherView: View {
     @ObservedObject var m: LauncherModel
     let play: () -> Void
     @State private var memory = os_proc_available_memory()
+    @State private var editingSwipeLayout = false
+
+    // Opens the layout editor of the Swipe touch layout (GestureLayoutEditor.swift). The layout itself is chosen in the game, with the button at the top centre
+    private var swipeEditorButton: some View {
+        Button { editingSwipeLayout = true } label: {
+            HStack {
+                Label("Edit swipe controls layout", systemImage: "formfitting.gamecontroller")
+                Spacer()
+                Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+            }
+        }
+    }
 
     var body: some View {
         GeometryReader { geometry in
@@ -119,8 +131,12 @@ private struct LauncherView: View {
                         if !rows.isEmpty {
                             Section(section) {
                                 ForEach(rows) { SettingRow(s: $0, m: m) }
+                                if section == "Controls" { swipeEditorButton }
                             }
                         }
+                    }
+                    if m.rows(in: "Controls").isEmpty {   // a game with no controls settings still gets the editor
+                        Section("Controls") { swipeEditorButton }
                     }
                     Section {
                         Button("Reset to tested defaults") { m.reset() }
@@ -142,6 +158,7 @@ private struct LauncherView: View {
                 .frame(width: geometry.size.width * 2 / 3)
             }
         }
+        .fullScreenCover(isPresented: $editingSwipeLayout) { GestureLayoutEditorView() }
         .preferredColorScheme(.dark)
         .task {
             while !Task.isCancelled {
