@@ -11,7 +11,7 @@ cmd = subprocess.run(['make', '-s', '-n', '-B', '-C', host, 'dmhost'], capture_o
 # The host's own link command (-o dmhost) first, then the per-file compile commands of the libraries it depends on (libvpx): header paths keep this order, so the host's headers are found first
 lines = [shlex.split(l) for l in cmd.splitlines() if l.lstrip().startswith('clang')]
 lines.sort(key=lambda t: 'dmhost' not in t)
-srcs, incs, defs, fws = [], [], [], []
+srcs, incs, defs, fws, libs = [], [], [], [], []
 for toks in lines:
     i = 0
     while i < len(toks):
@@ -21,6 +21,8 @@ for toks in lines:
             d = os.path.normpath(os.path.join(host, t[2:]))
             if d not in incs: incs.append(d)
         elif t.startswith('-D'): defs.append(t)
+        elif t.startswith(('-l', '-L')) or (t.endswith('.a') and os.path.isabs(t)):
+            if t not in libs: libs.append(t)
         elif t.endswith(('.c', '.m', '.S')): srcs.append(os.path.normpath(os.path.join(host, t)))
         i += 1
 assert srcs, 'no source files in the compile command'
@@ -40,3 +42,4 @@ for s in srcs:
 print('HEADER_SEARCH_PATHS = $(inherited) ' + ' '.join(f'"{d}"' for d in incs + dirs))
 print('OTHER_CFLAGS = $(inherited) ' + ' '.join(defs))
 print('DM_FRAMEWORKS = ' + ' '.join(f'-framework {f}' for f in fws if f != 'Cocoa'))
+print('DM_LIBS = ' + ' '.join(f'"{l}"' for l in libs))

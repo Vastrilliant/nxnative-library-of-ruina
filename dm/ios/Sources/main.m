@@ -82,10 +82,6 @@ static NSString *romfs_locate(void) {
 // Why a slim build found no usable game files: the verdict on Documents/romfs.img (the first of romfs_document_images), in the log and for the screen (front_ios_boot_message). NULL when the build has no romfs.id
 static char g_boot_message[640];
 const char *front_ios_boot_message(void) { return g_boot_message[0] ? g_boot_message : NULL; }
-// Why this device cannot run the games: its GPU has no BC texture formats, which the games' textures use and the host does not decompress (dm/gfx/tex/README.md; the A16 and older,
-// GitHub issue #704). Checked before the host's early loading, so the screen says so instead of Metal aborting at the game's first BC texture. NULL on a supported device
-static char g_device_message[320];
-const char *front_ios_device_message(void) { return g_device_message[0] ? g_device_message : NULL; }
 static void romfs_identity_report(NSString *doc) {
     romfs_id want, got;
     int rc = romfs_id_check([NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"romfs.id"].fileSystemRepresentation,
@@ -101,7 +97,7 @@ static int boot_env(void) {
     NSString *res = NSBundle.mainBundle.resourcePath;
     for (NSString *d in @[@"save", @"temp"]) [fm createDirectoryAtPath:[doc stringByAppendingPathComponent:d] withIntermediateDirectories:YES attributes:nil error:nil];
     // Keep game files and scratch data out of device backups (Documents is backed up by default; a RomFS placed there is many GB). Saves, logs and the pipeline list stay in the backup
-    for (NSString *d in [@[@"romfs", @"temp"] arrayByAddingObjectsFromArray:[romfs_document_images(doc) valueForKey:@"lastPathComponent"]]) {
+    for (NSString *d in [@[@"romfs", @"temp", @"temp_astc"] arrayByAddingObjectsFromArray:[romfs_document_images(doc) valueForKey:@"lastPathComponent"]]) {
         NSURL *u = [NSURL fileURLWithPath:[doc stringByAppendingPathComponent:d]]; NSError *e = nil;
         if ([fm fileExistsAtPath:u.path] && ![u setResourceValue:@YES forKey:NSURLIsExcludedFromBackupKey error:&e]) fprintf(stderr, "boot: %s could not be excluded from backup: %s\n", d.UTF8String, e.localizedDescription.UTF8String);
     }
@@ -144,9 +140,9 @@ static int boot_env(void) {
     NSString *lang = [NSBundle.mainBundle objectForInfoDictionaryKey:@"DMLanguage"];
     if (!getenv("DM_LANG") && [lang isKindOfClass:NSString.class] && lang.length) setenv("DM_LANG", lang.UTF8String, 0);
     fprintf(stderr, "boot: game language %s\n", getenv("DM_LANG") ?: "en-US");
-    id<MTLDevice> gpu = MTLCreateSystemDefaultDevice();   // the system default device, the one the graphics layers take (mtl_init repeats this check for the other routes)
-    // Device check removed: a GPU without BC textures is no longer refused here (BC is transcoded to ASTC); g_device_message stays empty, so the "not supported" screen never shows
-    if (!gpu.supportsBCTextureCompression) fprintf(stderr, "boot: GPU %s has no BC texture formats; relying on the ASTC transcode\n", gpu ? gpu.name.UTF8String : "no Metal device");
+    id<MTLDevice> gpu = MTLCreateSystemDefaultDevice();   // the system default device, the one the graphics layers take (mtl_init tells the format table about it for the other routes)
+    // A GPU without BC textures (the A16 and older) is no longer refused: BC textures are transcoded to ASTC on upload (dm/gfx/tex/README.md, BC_ASTC_PLAN.md). mtl_init logs the same
+    fprintf(stderr, "boot: GPU %s, BC textures %s\n", gpu ? gpu.name.UTF8String : "none", gpu.supportsBCTextureCompression ? "native (transcoded to ASTC as well)" : "not supported (transcoded to ASTC)");
     NSString *romfs = romfs_locate();
     if (!romfs) { romfs_identity_report(doc); fprintf(stderr, "boot: game files not found (Documents/romfs.img, Documents/romfs or <App>/romfs)\n"); return 0; }
     fprintf(stderr, "boot: game files %s\n", romfs.fileSystemRepresentation);

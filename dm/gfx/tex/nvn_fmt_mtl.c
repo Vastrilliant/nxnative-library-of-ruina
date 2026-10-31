@@ -1,7 +1,9 @@
 // NVNformat (nvn.h 0x01–0x9C) → Metal. The table is written entry by entry in NVN enum order; unlisted formats (including 0 and out of range) return 0.
 // Component remapping: "no alpha" formats such as RGBX / RGB_DXT1 read a as 1; RGB-family 16-bit packed formats swap r/b; all others are identity.
-// BC1–7 need GPU BC support (MTLDevice.supportsBCTextureCompression: Apple silicon Macs, A17 Pro and later, M1 iPads); the table does not check it, mtl_init (nvn_mtl.m) and the iOS front end (main.m) refuse a device without it.
+// BC1–7 need GPU BC support (MTLDevice.supportsBCTextureCompression: Apple silicon Macs, A17 Pro and later, M1 iPads); the table does not check it by itself: mtl_init (nvn_mtl.m) tells it through nvn_fmt_bc_native, and the formats the transcode does not cover then have no counterpart. A device without BC runs through the BC → ASTC transcode.
 #include "nvn_fmt_mtl.h"
+#include "bcn_decode.h"
+#include <stdatomic.h>
 
 enum {   // MTLPixelFormat
     R8Unorm = 10, R8Snorm = 12, R8Uint = 13, R8Sint = 14, R16Unorm = 20, R16Snorm = 22, R16Uint = 23, R16Sint = 24, R16Float = 25,
@@ -73,10 +75,35 @@ static const ent T[0x9D] = {
 // NVN ASTC order: 4x4 5x4 5x5 6x5 6x6 8x5 8x6 8x8 10x5 10x6 10x8 10x10 12x10 12x12; Metal skips one number between 6x6 and 8x5
 static const uint8_t astc_off[14] = {0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14};
 
+static atomic_int g_bc_astc;   // transcode mode (nvn_fmt_bc_to_astc)
+void nvn_fmt_bc_to_astc(int on) { atomic_store(&g_bc_astc, on != 0); }
+int nvn_fmt_bc_to_astc_on(void) { return atomic_load(&g_bc_astc); }
+static atomic_int g_bc_native = 1;   // the GPU reads BC textures (nvn_fmt_bc_native); on by default so hosts and tests that never set it behave as before
+void nvn_fmt_bc_native(int has) { atomic_store(&g_bc_native, has != 0); }
+int nvn_fmt_bc_native_on(void) { return atomic_load(&g_bc_native); }
+
+// BC1 / BC2 / BC3 / BC7 (NVN 0x41–0x48, 0x4D, 0x4E) and unsigned BC4 / BC5 (0x49, 0x4B): the formats bcn_decode handles and the transcode covers. Signed BC4 / BC5 (0x4A, 0x4C) are covered as well, as uncompressed R8Snorm / RG8Snorm (ASTC LDR is unsigned). BC6H is added by its own step.
+// BC4 decodes to (r, 0, 0, 1) and BC5 to (r, g, 0, 1), as Metal's BC4 / BC5 sample, so the ASTC texture needs no swizzle.
+int nvn_fmt_bcn(int f, int *srgb) {
+    int s = 0, k = 0;
+    if (f >= 0x41 && f <= 0x48) { s = f >= 0x45; k = (f - 0x41) % 4; k = k < 2 ? BCN_BC1 : k == 2 ? BCN_BC2 : BCN_BC3; }   // 0x41 RGB_DXT1, 0x42 DXT1, 0x43 DXT23, 0x44 DXT45, then the same four in sRGB
+    else if (f == 0x4D || f == 0x4E) { s = f == 0x4E; k = BCN_BC7; }
+    else if (f == 0x49) k = BCN_BC4;
+    else if (f == 0x4B) k = BCN_BC5;
+    else if (f == 0x4A) k = BCN_BC4S;
+    else if (f == 0x4C) k = BCN_BC5S;
+    if (srgb) *srgb = k ? s : 0;
+    return k;
+}
+
 int nvn_fmt_to_mtl(int f, uint32_t *mtl, uint8_t swz[4]) {
     ent e = {0, 0, 0, 0};
+    int bc_srgb, bc_kind;
     if (f >= 0x79 && f <= 0x94) { int k = (f - 0x79) % 14; e = (ent){(uint16_t)((f < 0x87 ? ASTC_LDR0 : ASTC_SRGB0) + astc_off[k]), 1, 0, 0}; }
     else if (f > 0 && f < (int)(sizeof T / sizeof *T)) e = T[f];
+    if (atomic_load(&g_bc_astc) && (bc_kind = nvn_fmt_bcn(f, &bc_srgb)))   // transcode: ASTC 4x4 in place of the BC format (substitute: the upload converts); RGB_DXT1 keeps its alpha-reads-1 remapping, BC4 / BC5 their zero / one channels (the decoded blocks hold them)
+        e = bc_kind == BCN_BC4S ? (ent){R8Snorm, 2, 0, 0} : bc_kind == BCN_BC5S ? (ent){RG8Snorm, 2, 0, 0} : (ent){(uint16_t)(bc_srgb ? ASTC_SRGB0 : ASTC_LDR0), 2, e.noalpha, 0};
+    if (!atomic_load(&g_bc_native) && f >= 0x41 && f <= 0x50 && e.mtl >= BC1 && e.mtl <= BC7_sRGB) e = (ent){0, 0, 0, 0};   // no BC on this GPU and the transcode did not take the format over (BC6H, which is skipped on purpose; any BC format with the transcode off): no counterpart, so the callers refuse the texture with a red line instead of Metal aborting on the descriptor
     if (mtl) *mtl = e.kind ? e.mtl : 0;
     if (swz) { swz[0] = e.rb ? NVN_SWZ_B : NVN_SWZ_R; swz[1] = NVN_SWZ_G; swz[2] = e.rb ? NVN_SWZ_R : NVN_SWZ_B; swz[3] = e.noalpha ? NVN_SWZ_ONE : NVN_SWZ_A; }
     return e.kind;

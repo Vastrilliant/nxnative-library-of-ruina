@@ -36,6 +36,21 @@ class Toolchain(unittest.TestCase):
         self.assertTrue(named, 'scripts/build_ipa_from_nsp.py names no Xcode version')
         self.assertEqual(set(named), {self.xcode}, f'scripts/build_ipa_from_nsp.py: the tested Xcode is not CI\'s {self.xcode}')
 
+    def test_astcenc_pins_match_in_both_workflows(self):   # build.yml links astcenc into the app, tests.yml tests the transcode against it: one version, one commit
+        pins = {}
+        for name in ('build.yml', 'tests.yml'):
+            text = (REPO / '.github/workflows' / name).read_text()
+            tag = re.search(r'^\s*ASTCENC_TAG: "([^"]+)"', text, re.M)
+            commit = re.search(r'^\s*ASTCENC_COMMIT: ([0-9a-f]{40})\b', text, re.M)
+            self.assertTrue(tag and commit, f'{name}: ASTCENC_TAG / ASTCENC_COMMIT (a 40-digit commit) are not set')
+            pins[name] = (tag.group(1), commit.group(1))
+        self.assertEqual(pins['build.yml'], pins['tests.yml'], 'build.yml and tests.yml pin different astcenc releases')
+
+    def test_ios_astcenc_does_not_reach_the_mac_host(self):   # ASTCENC_DIR is the host Makefile's: an iOS library under that name would be linked into the Mac host the NSP script builds
+        build = (REPO / '.github/workflows/build.yml').read_text()
+        self.assertIn('DM_IOS_ASTCENC_DIR=', build, 'build.yml: the iOS astcenc is not handed to build_ipa.sh as DM_IOS_ASTCENC_DIR')
+        self.assertNotRegex(build, r'(?m)^\s*(echo\s+")?ASTCENC_DIR=', 'build.yml: ASTCENC_DIR must not be exported to the job (the Mac host build would link the iOS library)')
+
 
 if __name__ == '__main__':
     unittest.main()

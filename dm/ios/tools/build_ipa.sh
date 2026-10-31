@@ -72,9 +72,19 @@ else [ -n "$V" ] && ls "$MSL_IOS/b-$V" 2> /dev/null | grep -q '_b.metallib$' || 
 t "app: $DM_DISPLAY_NAME $DM_APP_VERSION ($DM_BUNDLE_ID), language $DM_LANG$([ $DM_SHOW_FPS = YES ] && echo ', frame-rate counter on')"
 t "generate Gen/ (host sources, embedded modules, tables)"
 rm -rf Gen && mkdir -p Gen/dm || die "mkdir Gen"
+# astcenc built for the iPhone (arm64, iphoneos SDK): BC1 / BC2 / BC3 / BC7 textures are transcoded to ASTC 4x4 with it (dm/gfx/tex/nvn_bc_astc.c), so an iPhone without BC texture support can run them.
+# It is DM_IOS_ASTCENC_DIR here and only becomes the host Makefile's ASTCENC_DIR for gen_build.py below: the NSP script's Mac host build reads the same Makefile, and an iOS library cannot be linked into a Mac binary.
+# A build without it would compile the transcode out and the app would not show the missing library until a game loads a BC texture, so it stops here; DM_NO_ASTCENC=1 builds without it on purpose.
+if [ -n "${DM_IOS_ASTCENC_DIR:-}" ]; then
+  [ -s "$DM_IOS_ASTCENC_DIR/include/astcenc.h" ] && [ -s "$DM_IOS_ASTCENC_DIR/lib/libastcenc.a" ] || die "DM_IOS_ASTCENC_DIR=$DM_IOS_ASTCENC_DIR has no include/astcenc.h and lib/libastcenc.a"
+  lipo -info "$DM_IOS_ASTCENC_DIR/lib/libastcenc.a" 2> /dev/null | grep -q arm64 || die "$DM_IOS_ASTCENC_DIR/lib/libastcenc.a is not an arm64 library (it must be built for the iPhone SDK)"
+  export ASTCENC_DIR=$DM_IOS_ASTCENC_DIR; t "astcenc: $(cat "$ASTCENC_DIR/VERSION" 2> /dev/null || echo "$ASTCENC_DIR")"
+elif [ "${DM_NO_ASTCENC:-0}" = 1 ]; then unset ASTCENC_DIR; t "astcenc: off (DM_NO_ASTCENC=1): BC textures stay BC and the app only runs on an iPhone 15 Pro or later: older ones refuse every BC texture"
+else die "DM_IOS_ASTCENC_DIR is not set: the directory with include/astcenc.h and lib/libastcenc.a built for iOS arm64 (CI: .github/workflows/build.yml 'Build astcenc'); DM_NO_ASTCENC=1 builds without it"; fi
 python3 tools/gen_build.py "$DM/host" Gen > Gen/dm.xcconfig || die "gen_build"
+unset ASTCENC_DIR   # only gen_build.py reads it; the xcconfig it wrote carries the paths
 F=$(python3 tools/gen_embed.py "$PATCHED" Gen/embed.S $MODS) || die "gen_embed"
-echo "OTHER_LDFLAGS = \$(inherited) \$(DM_FRAMEWORKS) $F" >> Gen/dm.xcconfig
+echo "OTHER_LDFLAGS = \$(inherited) \$(DM_FRAMEWORKS) \$(DM_LIBS) $F" >> Gen/dm.xcconfig
 cp "$PATCHED"/*.fixups.tsv "$PATCHED"/*.gates.tsv "$PATCHED"/*.cuts.tsv "$PATCHED"/*.obs.tsv Gen/dm/ || die "copy rewriter tables"
 if [ -f "$PATCHED/nro.tsv" ]; then cp "$PATCHED/nro.tsv" Gen/dm/ || die "copy the NRO table"; fi   # the NRO modules the game loads with nn::ro (hle_ro.c), embedded by gen_embed.py
 if [ "$GFXAPI" = vulkan ] || [ "$GFXAPI" = gl ]; then cp "$GD/shader_map.tsv" "$GD/pso_manifest.tsv" Gen/dm/ || die "copy shader tables"   # empty NVN tables: the NVN layer draws nothing

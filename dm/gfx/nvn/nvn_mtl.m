@@ -22,6 +22,7 @@
 #include "../tex/nvn_fmt_mtl.h"
 #include "../tex/nvn_deswizzle.h"
 #include "../tex/nvn_deswizzle_gpu.h"
+#include "../tex/nvn_bc_astc.h"
 #include "nvn_builtin.h"
 #include "nvn_dirty.h"
 #include "nvn_depth_clear.h"
@@ -38,8 +39,7 @@
 #include "dmsh_abi.h"
 // c2 holds the handle tables (DMSH_C2_*), c0 the storage buffer table of each stage at DMSH_C0_SSBO_<stage> + 0x10 r (address 64 bits, size 32 bits). The replay fills one DMSH_DRV_SIZE buffer per segment a shader reads
 _Static_assert(DMSH_C2_TEX + DMSH_C2_ROW * DMSH_C2_TEX_SLOTS == DMSH_C2_SEPTEX && DMSH_C2_SEPTEX + DMSH_C2_ROW * DMSH_C2_SEP_SLOTS == DMSH_C2_SAMP && DMSH_C2_SAMP + DMSH_C2_ROW * DMSH_C2_SEP_SLOTS <= DMSH_DRV_SIZE && NVN_SEPTEX_SLOT0 + DMSH_C2_SEP_SLOTS == NTEX, "NVN driver handle tables");
-_Static_assert(DMSH_C0_CS_UBO + DMSH_C0_ROW * DMSH_C0_CS_UBO_SLOTS == DMSH_C0_SSBO_CS && DMSH_C0_SSBO_PS + DMSH_C0_ROW * DMSH_C0_SSBO_SLOTS <= DMSH_C0_POINT_SIZE && DMSH_C0_POINT_SIZE + 4 <= DMSH_C0_SAMPLE_TABLE &&
-               DMSH_C0_SAMPLE_TABLE + DMSH_C0_SAMPLE_BYTES <= DMSH_C0_SAMPLE_INFO && DMSH_C0_SAMPLE_INFO + 16 <= DMSH_C0_BASE_INSTANCE && DMSH_C0_BASE_INSTANCE + 4 <= DMSH_DRV_SIZE, "NVN driver c0 tables");
+_Static_assert(DMSH_C0_CS_UBO + DMSH_C0_ROW * DMSH_C0_CS_UBO_SLOTS == DMSH_C0_SSBO_CS && DMSH_C0_SSBO_PS + DMSH_C0_ROW * DMSH_C0_SSBO_SLOTS <= DMSH_C0_POINT_SIZE && DMSH_C0_BASE_INSTANCE + 4 <= DMSH_DRV_SIZE, "NVN driver c0 tables");
 // Geometry's counter/output addresses are c0+0x410/0x430 (NieR:Automata's MOVC/IADDC pairs); they use the logical NVN stage even when Metal executes a compute kernel.
 static int c0_ssbo_base(int stage) { return stage == 0 ? DMSH_C0_SSBO_VS : stage == 1 ? DMSH_C0_SSBO_PS : stage == 2 ? DMSH_C0_SSBO_GS : stage == 5 ? DMSH_C0_SSBO_CS : -1; }   // NVN stages 0 vertex, 1 pixel, 2 geometry, 5 compute; hull / domain never seen
 // The handle a texture binding of slot reg reads: as c2 holds it (encode_args fills c2 the same way), a combined slot past 31 shares its word with an image slot, and a bound image
@@ -423,9 +423,9 @@ void mtl_init(void) {
         MLOG("[RED] Metal device %s has no Metal 4 (%s%s%s): the classic part only, nothing is presented (enough for a run-time shader capture)", g_dev.name.UTF8String, no4, *why ? ": " : "", why);
         return;
     }
-    // BC textures are created and uploaded as BC, with no decompression path (dm/gfx/tex/README.md); without BC the first one aborts in Metal's descriptor validation mid-game
-    // (GitHub issue #704: an iPhone 15, A16). The iOS front end refuses such a device before the launcher (main.m); this stops every other route at the device, with the reason
-    if (!g_dev.supportsBCTextureCompression) fprintf(stderr, "mtl: device %s has no BC texture formats; relying on the ASTC transcode\n", g_dev.name.UTF8String);
+    // A GPU without BC texture formats (an iPhone before the A17 Pro) runs through the BC → ASTC transcode (nvn_bc_astc_init below, dm/gfx/tex/README.md); it is no longer refused here.
+    // The format table is told, so a BC format the transcode does not take over (BC6H, or all of them with DM_NVN_BC_ASTC=0) is refused as a texture with a red line instead of Metal aborting on its descriptor
+    nvn_fmt_bc_native(g_dev.supportsBCTextureCompression);
     [g_q addResidencySet:g_res];
     [g_q4 addResidencySet:g_res];
     { void crash_set_wait_dump(void (*fn)(void)); void mtl_wait_state_dump(void); crash_set_wait_dump(mtl_wait_state_dump); }
@@ -467,6 +467,14 @@ void mtl_init(void) {
     g_nvn_deswz_gpu = nvn_deswz_gpu_init(g_dev) == 0;
     dm_res_report_register(mtl_res_counts);
     if (!g_nvn_deswz_gpu) MLOG("[RED] GPU deswizzle init failed; swizzled textures fall back to the CPU");
+    // BC1 / BC2 / BC3 / BC7 textures are transcoded to ASTC 4x4 on every device (dm/gfx/tex/README.md): the format table maps them to ASTC from here on, so this comes before the first texture.
+    // DM_NVN_BC_ASTC=0 keeps them BC (BC6H always is, until its stage)
+    if (nvn_bc_astc_init()) MLOG("BC1 / BC2 / BC3 / BC7 and BC4 / BC5 textures are transcoded (ASTC 4x4 with astcenc, medium quality, %u thread(s) for a large image; signed BC4 / BC5 to R8Snorm / RG8Snorm); DM_NVN_BC_ASTC=0 turns it off", nvn_bc_astc_threads());
+    else MLOG("BC textures stay BC (%s)", getenv("DM_NVN_BC_ASTC") ? "DM_NVN_BC_ASTC=0" : "this host was built without astcenc");
+    if (!g_dev.supportsBCTextureCompression) {   // (MLOG pastes its format after a literal, so each message is a literal of its own)
+        if (nvn_bc_astc_active()) MLOG("[RED] Metal device %s has no BC texture formats: BC6H textures (not transcoded) are refused, the rest are transcoded to ASTC", g_dev.name.UTF8String);
+        else MLOG("[RED] Metal device %s has no BC texture formats and the transcode is off (DM_NVN_BC_ASTC=0, or built without astcenc): every BC texture is refused", g_dev.name.UTF8String);
+    }
     MLOG("Metal device %s", g_dev.name.UTF8String);
     udc_selftest();
 }
@@ -1597,7 +1605,7 @@ void mtl_drain(void) { present_drop_for_suspend(); mtl_present_flush(); snap_dra
 
 // ================= Render replay =================
 #include "../../host/front.h"
-static int g_red_once[140];
+static int g_red_once[145];
 #define RED_ONCE(k, ...) do { if (!g_red_once[k]++) MLOG("[RED] " __VA_ARGS__); } while (0)
 // NVN vertex streams 0–15 → Metal vertex buffer slots: 0–13 go to 16–29 (30 is the constant fallback buffer), 14 and 15 to 14 and 15. Metal has only the 31 slots 0–30; translated shaders use only buffer(0) (the argument buffer),
 // and the host's own vertex functions read no vertex buffers. 13 Sentinels uses stream 15, and the old 16 + stream went out of range (Metal assertion: buffer index (31) must be < 31)
@@ -2256,7 +2264,8 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
     if (!d) return nil;
     d.usage |= keep & (MTLTextureUsageRenderTarget | MTLTextureUsagePixelFormatView);
     int rb_shift = rb_packed_shift(t->d.format);   // the RGB565 family is repacked into Metal's order on the CPU (rb_packed_shift)
-    int direct = !rb_shift && stamp && direct_upload_on() && g_nvn_deswz_gpu && !(t->pool && nvn_sparse_pool(t->pool)) && nvn_deswz_gpu_direct_supported(&t->d);
+    int tc = nvn_bc_astc_covers(t->d.format);   // BC1 / BC2 / BC3 / BC7 and unsigned BC4 / BC5: decoded and encoded as ASTC 4x4 on the CPU (the GPU deswizzles below only produce BC blocks); storage stays BC, the host texture is ASTC
+    int direct = !tc && !rb_shift && stamp && direct_upload_on() && g_nvn_deswz_gpu && !(t->pool && nvn_sparse_pool(t->pool)) && nvn_deswz_gpu_direct_supported(&t->d);
     if (direct) d.usage |= MTLTextureUsageShaderWrite | MTLTextureUsagePixelFormatView;
     id<MTLTexture> mt = reuse && reuse.pixelFormat == d.pixelFormat && reuse.width == d.width && reuse.height == d.height && reuse.mipmapLevelCount == d.mipmapLevelCount && reuse.textureType == d.textureType
                         && (reuse.usage & d.usage) == d.usage
@@ -2268,17 +2277,18 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
     if (stamp) {   // no stamp: a one-time upload of content the CPU will not change (tex_init_fill), with no write tracking
         *stamp = nvn_dirty_now();
         if (sparse) nvn_sparse_protect(t->pool, (uint64_t)(uintptr_t)t->mem, t->L.size); else nvn_dirty_protect(t->mem, t->L.size); }
-    int bw, bh, bpb = nvn_fmt_bpb(t->d.format, &bw, &bh);
+    int bw, bh, bpb = nvn_fmt_bpb(t->d.format, &bw, &bh);   // the guest's layout (storage)
+    int hbw = bw, hbh = bh, hbpb = bpb; if (tc) nvn_bc_astc_host(t->d.format, &hbw, &hbh, &hbpb);   // the host texture's: ASTC 4x4 blocks are 16 bytes, twice a BC1 block
     unsigned layers = (t->d.target == 4 || t->d.target == 9) ? t->d.depth : t->d.target == 8 ? 6 : t->d.target == 3 ? t->d.height : 1;   // a cube array's depth counts layer-faces (tex_desc)
     size_t total = 0;
     for (unsigned l = 0; l < d.mipmapLevelCount; l++) {
         uint32_t w = MAX(t->d.width >> l, 1u), h = MAX(t->d.height >> l, 1u), z = t->d.target == 2 ? MAX(t->d.depth >> l, 1u) : 1;
-        total += (size_t)((w + bw - 1) / bw) * bpb * ((h + bh - 1) / bh) * z * layers;
+        total += (size_t)((w + hbw - 1) / hbw) * hbpb * ((h + hbh - 1) / hbh) * z * layers;
     }
     g_bp_up_bytes += total;
     void *mb; uint64_t mo;
-    int use_gpu = !rb_shift && !sparse && g_nvn_deswz_gpu && mtl_addr((uint64_t)t->mem, t->L.size, &mb, &mo);   // a sparse pool's texture is gathered through its page table on the CPU
-    if (g_nvn_deswz_gpu && !use_gpu && !sparse && !rb_shift) RED_ONCE(40, "swizzled texture storage is not in a memory pool; falling back to the CPU");
+    int use_gpu = !tc && !rb_shift && !sparse && g_nvn_deswz_gpu && mtl_addr((uint64_t)t->mem, t->L.size, &mb, &mo);   // a sparse pool's texture is gathered through its page table on the CPU
+    if (g_nvn_deswz_gpu && !use_gpu && !sparse && !rb_shift && !tc) RED_ONCE(40, "swizzled texture storage is not in a memory pool; falling back to the CPU");
     if (use_gpu) {
         // The GPU reads the memory pool at execution time, which is closer to a real Switch than a snapshot at CPU upload time; the dirty-page stamp is still taken before encoding, and later writes still trigger a re-upload.
         up_begin();
@@ -2331,11 +2341,24 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
     id<MTLBuffer> stg = [g_dev newBufferWithLength:total ? total : 16 options:MTLResourceStorageModeShared];
     res_add(stg); [g_up_keep addObject:stg];
     size_t off = 0;
+    uint8_t *lin = NULL;   // a transcoded texture's level as the guest stores it (BC blocks), before it becomes ASTC
+    if (tc) { size_t big = (size_t)((t->d.width + bw - 1) / bw) * bpb * ((t->d.height + bh - 1) / bh) * (t->d.target == 2 ? MAX(t->d.depth, 1u) : 1);
+        if (!(lin = malloc(big ? big : 1))) MDIE("BC transcode buffer of %zu bytes failed", big); }
     int zb = zblock_on() && t->d.format >= 0x79 && t->d.format <= 0x94; if (zb) { g_zb_ser = t->serial; g_zb_n = (int)MIN(d.mipmapLevelCount, 16u); memset(g_zb, 0, sizeof g_zb); memset(g_zb_tot, 0, sizeof g_zb_tot); }
     for (unsigned l = 0; l < d.mipmapLevelCount; l++) {
         uint32_t w = MAX(t->d.width >> l, 1u), h = MAX(t->d.height >> l, 1u), z = t->d.target == 2 ? MAX(t->d.depth >> l, 1u) : 1;
         size_t pitch = (size_t)((w + bw - 1) / bw) * bpb, rows = (h + bh - 1) / bh;
+        size_t hpitch = (size_t)((w + hbw - 1) / hbw) * hbpb, hrows = (h + hbh - 1) / hbh;   // = pitch, rows unless transcoded
         for (unsigned y = 0; y < layers; y++) {
+            if (tc) {
+                if (nvn_deswizzle(&t->d, l, y, src, lin, pitch)) { RED_ONCE(9, "deswizzle failed format %#x target %d", t->d.format, t->d.target); break; }
+                for (unsigned zi = 0; zi < z; zi++)
+                    if (nvn_bc_astc_image(t->d.format, lin + (size_t)zi * pitch * rows, pitch * rows, w, h, (uint8_t *)stg.contents + off + (size_t)zi * hpitch * hrows, hpitch * hrows))
+                        { RED_ONCE(140, "BC → ASTC transcode failed: format %#x %ux%u level %u (the level stays zero: ASTC error colour)", t->d.format, w, h, l); break; }
+                up_blit_add(stg, off, hpitch, hpitch * hrows, MTLSizeMake(w, h, z), mt, y, l);
+                off += hpitch * hrows * z;
+                continue;
+            }
             if (nvn_deswizzle(&t->d, l, y, src, (uint8_t *)stg.contents + off, pitch)) { RED_ONCE(9, "deswizzle failed format %#x target %d", t->d.format, t->d.target); break; }
             if (rb_shift) rb_swap_rows((uint8_t *)stg.contents + off, pitch, rows, z, pitch, pitch * rows, rb_shift);
             if (zb && l < 16) { const uint64_t *q = (const uint64_t *)((const uint8_t *)stg.contents + off); size_t nb = pitch * rows * z / 16;
@@ -2345,7 +2368,7 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
             off += pitch * rows * z;
         }
     }
-    free(part);
+    free(part); free(lin);
     up_flush();
     return mt;
 }
@@ -2867,7 +2890,6 @@ void dm_gfx_passdump_next(long n) { long f = (long)atomic_load(&g_cur_frame); g_
 #define PD(...) do { if (passdump()) { flockfile(stderr); fprintf(stderr, "[pass] F%llu ", (unsigned long long)atomic_load(&g_cur_frame)); fprintf(stderr, __VA_ARGS__); fputc('\n', stderr); funlockfile(stderr); } } while (0)
 static void blit_note(void) { if (g_enc) PD("E %llu copy / buffer update ends the render pass", g_stat_pass); }
 __attribute__((weak)) void dm_guest_frame_tick(void) {}   // hle_os.c provides the strong definition (DM_DETCLOCK deterministic guest clock); a no-op when graphics unit tests do not link the host   // diag.c provides the strong definition (DM_TICK_HOLD=E:SHOT unfreeze); a no-op when graphics unit tests do not link the host
-__attribute__((weak)) void dm_cheats_present(void) {}   // hle_cheats.c provides the strong definition (the Atmosphère cheat pass per presented frame); a no-op when graphics unit tests do not link the host
 __attribute__((weak)) int dm_detclock_enabled(void) { return 0; }   // Same as above: the host's hle_os.c provides the strong definition; when graphics unit tests do not link the host, the deterministic clock is treated as off
 __attribute__((weak)) uint64_t guest_ns(void) { return 0; }          // Same as above: read only when the deterministic clock is on; never reached in graphics unit tests
 static uint64_t att_bytes(id<MTLTexture> t, NSUInteger level) {
@@ -7033,24 +7055,6 @@ static int ubo_samp_id(uint32_t h) { int s = (int)(h >> 20); return s ? s + S.sa
 static uint32_t g_dispatch_dim[3];   // the current dispatch's workgroup counts (driver segment c0 + 0x200 for compute)
 static uint32_t g_draw_binst;   // the current draw's base instance (draw), for c0 + 0x644
 static __unsafe_unretained id<MTLBuffer> g_c0_dim_buf; static size_t g_c0_dim_off;   // where encode_args put them for this dispatch (nil: the shader reads no c0); an indirect dispatch copies its GPU-written counts there
-// The pixel stage's sample position rows of c0, for the current pass's sample count. GLSLC lowers gl_SamplePosition (and interpolation at a sample) to a byte of a table at 0x620,
-// indexed by the sample index (PIXLD.MYINDEX) and the pixel's place in a location grid: index = ((((y & w) << z) + (x & z)) << log2 samples) + (sample & mask), with
-// {mask, log2 samples, z, w} at 0x630; each byte holds the sample's x (low nibble) and y (high nibble) in 1/16 pixel. Metroid Prime Remastered's G-buffer shaders pack it into an
-// integer target (30 of its pixel shaders read it); left at 0, every sample sat in the pixel's corner instead of its centre (0x88 for one sample). Metal rasterizes at its default
-// positions, the same for every pixel, so the grid masks stay 0 and the table holds those positions. Only one sample was met: the nibble order for several is the hardware's
-// (nouveau's sample locations), not seen in a game
-static void c0_sample_rows(uint8_t *d, uint32_t samples) {
-    static uint8_t table[17][DMSH_C0_SAMPLE_BYTES]; static uint32_t made;   // per sample count, made on first use
-    if (samples < 1 || samples > DMSH_C0_SAMPLE_BYTES) samples = 1;
-    if (!(made >> samples & 1)) {
-        if (samples == 1) table[1][0] = 0x88;
-        else { MTLSamplePosition pos[DMSH_C0_SAMPLE_BYTES]; [g_dev getDefaultSamplePositions:pos count:samples];
-               for (uint32_t i = 0; i < samples; i++) table[samples][i] = (uint8_t)(((int)(pos[i].x * 16) & 15) | ((int)(pos[i].y * 16) & 15) << 4); }
-        made |= 1u << samples;
-    }
-    uint32_t info[4] = { samples - 1, (uint32_t)__builtin_ctz(samples), 0, 0 };
-    memcpy(d + DMSH_C0_SAMPLE_TABLE, table[samples], DMSH_C0_SAMPLE_BYTES); memcpy(d + DMSH_C0_SAMPLE_INFO, info, sizeof info);
-}
 static uint64_t g_geo_bind[5];
 static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, int metal_vertex);
 static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, int metal_vertex) { AP_B; int r = encode_args_(en, sh, nvn_stage, metal_vertex); AP_E(3); return r; }
@@ -7272,7 +7276,6 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
                     // transform this way, and 1,550 reads in 793 of its vertex shaders. Left at 0, every box was box 0: all six queries came back empty, and the game, taking its characters for
                     // hidden, posed their legs straight back from the hips. 0x640 (read by 58 shaders, added to the vertex ID) stays 0: what the driver puts there is not established
                     if (nvn_stage != 5) memcpy(d + DMSH_C0_BASE_INSTANCE, &g_draw_binst, 4);
-                    if (nvn_stage == 1) c0_sample_rows(d, g_pass.samples);
                     if (nvn_stage == 5) {
                         memcpy(d + DMSH_C0_DISPATCH, g_dispatch_dim, 12); g_c0_dim_buf = db; g_c0_dim_off = doff + DMSH_C0_DISPATCH;
                         for (int r = 0; r < DMSH_C0_CS_UBO_SLOTS; r++) { uint64_t a = S.ubo[5][r].addr; uint32_t n = (uint32_t)S.ubo[5][r].size; memcpy(d + DMSH_C0_CS_UBO + DMSH_C0_ROW * r, &a, 8); memcpy(d + DMSH_C0_CS_UBO + DMSH_C0_ROW * r + 8, &n, 4); }
@@ -9522,9 +9525,9 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
     if (!g_geo_program && S.rast_discard && S.tf_on) { tf_draw(pr, dw, di); return; }
     // Feedback captures rasterized draws too (Donkey Kong Country: Tropical Freeze's fur).
     if (!g_geo_program && S.tf_on && pr && pr->sh[0] && pr->sh[0]->tf_fn) tf_draw(pr, dw, di);
-    // Rasterizer discard suppresses fragments, not vertex execution or its storage and image writes (the build gives such a vertex shader main0_discard).
-    // Xenoblade Chronicles 3 uses vertex-only work before its skinned-model draws; Metroid Prime Remastered fills its fog volume with image stores from points.
-    if (S.rast_discard && (!pr->sh[0] || !pr->sh[0]->discard_fn)) { PD("Z %llu draw skipped: rasterizer discard with no vertex storage or image writes vs=%s", g_stat_pass + !g_enc, pr->sh[0] ? pr->sh[0]->key : "-"); return; }
+    // Rasterizer discard suppresses fragments, not vertex execution or its storage writes.
+    // Xenoblade Chronicles 3 uses vertex-only work before its skinned-model draws.
+    if (S.rast_discard && (!pr->sh[0] || !pr->sh[0]->discard_fn)) { PD("Z %llu draw skipped: rasterizer discard with no vertex storage writes vs=%s", g_stat_pass + !g_enc, pr->sh[0] ? pr->sh[0]->key : "-"); return; }
     if (g_nubd && (g_enc || ubd_lazy()) && ubd_conflict(pr, dw, di)) { g_ubd_conflicts++; rp_end(); ubd_land(); }   // land the deferred inline updates before this draw (see ubd_conflict)
     vertex_dump(pr->sh[0], dw, di);
     if (zskip_can_draw(pr)) {   // Zero-source skip: the output is always 0, writing 0 over 0, so this draw changes no result (see zskip_can_draw)
@@ -9971,6 +9974,7 @@ static void copy_t2b(const p_copy_b2t *c) {
     int bw, bh, bpb = nvn_fmt_bpb(c->tex->d.format, &bw, &bh);
     unsigned level = c->has_view && c->view.set_levels ? c->view.base_level : 0, layer0 = c->has_view && c->view.set_layers ? c->view.min_layer : 0;
     if (!tex_level_ok(t, level, "texture-to-buffer copy")) return;
+    if (nvn_bc_astc_covers(c->tex->d.format)) { RED_ONCE(143, "texture→buffer copy of BC texture ser=%llu (ASTC on the host): not done, the buffer keeps its bytes (open: the BC blocks are gone; stage 4)", (unsigned long long)c->tex->serial); return; }
     size_t row = S.copy_stride ? (size_t)S.copy_stride : (size_t)((c->r.width + bw - 1) / bw) * bpb;
     size_t rows = (c->r.height + bh - 1) / bh, img = S.copy_img_stride ? (size_t)S.copy_img_stride : row * rows;   // per layer: SetCopyImageStride, else tightly packed
     int is3d = c->tex->d.target == 2, nz = c->r.depth ? c->r.depth : 1;
@@ -10026,6 +10030,7 @@ void mtl_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNc
     @autoreleasepool {
     id<MTLTexture> mt = tex_mtl(t);
     if (!mt || !tex_level_ok(mt, level, "CPU readback")) { memset(dst, 0, img * nz); return; }
+    if (nvn_bc_astc_covers(t->d.format)) { RED_ONCE(144, "CPU readback of BC texture ser=%llu that is ASTC on the host and not in storage: zeros (open: the BC blocks are gone; stage 4)", (unsigned long long)t->serial); memset(dst, 0, img * nz); return; }
     mtl_finish_gpu_at(WS_READTEX);
     id<MTLBuffer> buf = [g_dev newBufferWithLength:wb * hb * nz options:MTLResourceStorageModeShared];
     id<MTLCommandBuffer> cb = q_cb(); id<MTLBlitCommandEncoder> b = enc_b_begin(cb);
@@ -10089,6 +10094,7 @@ static size_t mtl_pf_block_bytes(MTLPixelFormat pf) {   // bytes per texel, or p
 }
 static void mirror_readback(const tex_t *t, id<MTLTexture> d, unsigned level, unsigned layer0, const NVNcopyRegion *r, const char *from, int absorb) {   // absorb: a render pass's readback, which the texture takes as its own (pkg_absorb_note)
     int bw, bh, bpb = nvn_fmt_bpb(t->d.format, &bw, &bh), nz = r->depth ? r->depth : 1;
+    if (nvn_bc_astc_covers(t->d.format)) { mirror_note(-1, t, level, from, 1); return; }   // the host texture holds ASTC, not the BC blocks the storage needs (its block size can equal BC2 / BC3's, which the check below would let through)
     if (!bpb || r->width <= 0 || r->height <= 0 || d.sampleCount > 1 || mtl_fmt_depth(d.pixelFormat) || d.pixelFormat == MTLPixelFormatStencil8 || mtl_pf_block_bytes(d.pixelFormat) != (size_t)bpb) { mirror_note(-1, t, level, from, 1); return; }
     size_t row = (size_t)((r->width + bw - 1) / bw) * bpb, img = row * (size_t)((r->height + bh - 1) / bh);
     id<MTLBuffer> b = [g_dev newBufferWithLength:img * nz options:MTLResourceStorageModeShared];
@@ -10138,6 +10144,25 @@ static void copy_b2t(const p_copy_b2t *c) {
         FILE *f = fopen(p, "wb"); if (f) { fwrite((const uint8_t *)((__bridge id<MTLBuffer>)mb).contents + mo, 1, img * nz, f); fclose(f); } } }
     // Into Metal's order (rb_copy_shift): converted on the GPU into a staging area of the frame arena, which the blit copies from
     id<MTLBuffer> sb = (__bridge id<MTLBuffer>)mb; int shift = rb_copy_shift(c->tex, t);
+    // A BC1 / BC2 / BC3 / BC7 or unsigned BC4 / BC5 texture is ASTC 4x4 on the host: the source blocks are decoded and encoded on the CPU into a staging area, which the blit copies from (nvn_bc_astc_covers). That reads the
+    // buffer now, as the storage mirror above does, so a source the GPU writes (pend_hits, sbw_hits, gw_live: queued or running work of this or an earlier submission) cannot be read: nothing is
+    // copied then and the red line says so (open: a GPU-written BC source would need the transcode on the GPU, or a readback; no game is known to do it)
+    if (nvn_bc_astc_covers(c->tex->d.format)) {
+        int hbw = 4, hbh = 4, hbpb = 16; nvn_bc_astc_host(c->tex->d.format, &hbw, &hbh, &hbpb);
+        size_t trow = (size_t)((c->r.width + hbw - 1) / hbw) * hbpb, timg = trow * ((c->r.height + hbh - 1) / hbh);   // ASTC 4x4 rows of the copy: rows of 4 texels in both formats (16 bytes a block; the BC1 / BC4 source has 8)
+        int busy = pend_hits(c->src, img * nz) || g_sbw_over || sbw_hits(c->src, c->src + img * nz) || gw_live(c->src, c->src + img * nz) || !nvn_host_readable(c->src, img * nz);
+        id<MTLBuffer> ab = nil; size_t ao = busy ? 0 : arena_alloc(timg * nz, &ab);
+        if (busy || !ab) { RED_ONCE(141, "buffer→texture copy into BC texture ser=%llu (ASTC on the host): its source is written by the GPU or not readable on the CPU, copy skipped", (unsigned long long)c->tex->serial); return; }
+        size_t tight = (size_t)((c->r.width + bw - 1) / bw) * bpb; uint8_t *rep = tight == row ? NULL : malloc(tight * rows);   // rows of a wider stride are packed first
+        for (int z = 0; z < nz; z++) {
+            const uint8_t *zsrc = (const uint8_t *)(uintptr_t)c->src + (size_t)z * img;
+            if (rep) { for (size_t y = 0; y < rows; y++) memcpy(rep + y * tight, zsrc + y * row, tight); zsrc = rep; }
+            if (nvn_bc_astc_image(c->tex->d.format, zsrc, tight * rows, (unsigned)c->r.width, (unsigned)c->r.height, (uint8_t *)ab.contents + ao + (size_t)z * timg, timg)) {
+                RED_ONCE(142, "BC → ASTC transcode of a buffer→texture copy failed: format %#x %dx%d", c->tex->d.format, c->r.width, c->r.height); memset((uint8_t *)ab.contents + ao + (size_t)z * timg, 0, timg); }
+        }
+        free(rep);
+        sb = ab; mo = ao; row = trow; img = timg;
+    }
     if (shift) {
         size_t wb = (size_t)((c->r.width + bw - 1) / bw) * bpb; id<MTLBuffer> ab; size_t ao = arena_alloc(wb * rows * nz, &ab);
         if (rb_swap_gpu(sb.gpuAddress + mo, row, img, ab.gpuAddress + ao, wb, wb * rows, wb, rows, nz, shift)) { sb = ab; mo = ao; row = wb; img = wb * rows; }
