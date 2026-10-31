@@ -284,15 +284,21 @@ jobs:
           python3 scripts/build_ipa_from_nsp.py "${args[@]}" $EXTRA_ARGS
           ls -lh "$GAME_DIR/nxnative.ipa"
 
+      - name: Check shader output
+        id: shdone
+        if: ${{ !cancelled() && steps.shcache.outputs.cache-hit != 'true' }}
+        run: |
+          if ls "$HOME"/work/shader/ios/b-*.key >/dev/null 2>&1; then echo "ready=true" >> "$GITHUB_OUTPUT"; fi
+
       - name: Save shader cache
-        if: ${{ success() && steps.shcache.outputs.cache-hit != 'true' }}
+        if: ${{ !cancelled() && steps.shdone.outputs.ready == 'true' }}
         uses: actions/cache/save@v4
         with:
           path: ~/work/shader
           key: nxshader-v1-${{ steps.links.outputs.hash }}-${{ hashFiles('dm/gfx/**', 'dm/games/**', 'scripts/build_ipa_from_nsp.py') }}
 
       - name: Show RomFS image identity
-        if: ${{ inputs.romfs_mode == 'separate' }}
+        if: ${{ success() && inputs.romfs_mode == 'separate' }}
         run: |
           set -eo pipefail
           for img in "$HOME"/work/extract/*/RomFS.img; do
