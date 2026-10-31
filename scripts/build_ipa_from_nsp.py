@@ -816,6 +816,9 @@ def write_profile(pdir, app, f):
 
 
 # ---- Derived profile (a version the game's profile was not brought up on) ----
+SPLIT_TABLES = ('shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv')   # the tables the shader split writes: a registered profile without them (a profile taken from a fork, or one whose tables were never committed) is packed like a derived one, with tables made from the files being packed
+
+
 DERIVED_SKIP = {'game.tsv', 'shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv', 'pso_pairs.tsv', 'c1_full.tsv', 'cb_extent.tsv', 'vk_capture.tsv', 'gl_capture.tsv', 'patches.py'}   # made again from the packed version's own files (patches.py: the rewriter's patches of the registered builds)
 
 
@@ -2315,6 +2318,8 @@ def main(args=None):
             derived = f'{pkg_ver} is not a version game profile {g.id} registers ({registered_builds})'
         elif not all(v in have for v in need): derived = f'the folder has no {", ".join(v for v in need if v not in have)}, whose files game profile {g.id}\'s shader tables were made from'
         if alias and not derived: derived = f'title {app:016X} is not game profile {g.id}\'s title {g.title_id:016X}'
+        lacking = [n for n in SPLIT_TABLES if not (g.dir / n).is_file()]
+        if lacking and not derived: derived = f'game profile {g.id} has no {", ".join(lacking)}'   # nothing to check the split against: it makes them, as for a provisional profile
         if derived: say(f'{derived}: packing {pkg_ver} from a profile derived from it')
     versions = [pkg_ver] if derived else need + ([pkg_ver] if pkg_ver not in need else [])
     work = work_dir(args) or nsp_dir / f'{g.id}_build'
