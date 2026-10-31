@@ -1151,6 +1151,11 @@ static int ub_partial_on(void) { static int v = -1; if (v < 0) { const char *e =
 enum { GW_N = 4096, GW_PAGES = 4096 };
 static struct { uint64_t page, fence; } g_gw[GW_N];   // page ~0: two live pages met in the slot, so any page there counts as written until fence completes
 static uint64_t g_gw_all;                            // every page counts as written until this fence completes (a submission whose writes could not all be listed)
+static struct { uint64_t page, fence; } g_gwu[GW_N];
+static uint64_t g_gwu_all;
+enum { KW_N = 32768 };
+typedef struct { uint64_t lo, hi, fence; const uint8_t *src; } kw_ent;
+static kw_ent g_kw[KW_N]; static int g_nkw;
 static uint64_t g_ubp_made, g_ubp_reused, g_ubp_refused;   // partial shadows made / taken from the cache / refused (the pass ended), for the residency set line
 static uint64_t g_ubp_why[5];   // why ubp_get refused: 0 too large or off, 1 other GPU writes in this submission (sbw), 2 GPU writes of an earlier submission still running, 3 a copy, fill or feedback write queued, 4 unreadable or too many writes
 static inline unsigned gw_slot(uint64_t pg) { return (unsigned)((pg * 0x9E3779B97F4A7C15ull) >> 52) & (GW_N - 1); }
@@ -1162,19 +1167,43 @@ static void gw_put(uint64_t lo, uint64_t hi, uint64_t fence, uint64_t done) {
         g_gw[s].page = g_gw[s].page == pg || g_gw[s].fence <= done ? pg : ~0ull;
         if (fence > g_gw[s].fence) g_gw[s].fence = fence; }
 }
+static void gwu_put(uint64_t lo, uint64_t hi, uint64_t fence, uint64_t done) {
+    if (hi <= lo) return;
+    uint64_t p0 = lo >> 12, p1 = (hi - 1) >> 12;
+    if (p1 - p0 >= GW_PAGES) { if (fence > g_gwu_all) g_gwu_all = fence; return; }
+    for (uint64_t pg = p0; pg <= p1; pg++) { unsigned s = gw_slot(pg);
+        g_gwu[s].page = g_gwu[s].page == pg || g_gwu[s].fence <= done ? pg : ~0ull;
+        if (fence > g_gwu[s].fence) g_gwu[s].fence = fence; }
+}
 static int gw_live(uint64_t lo, uint64_t hi) {
     uint64_t done = g_done;   // read without the lock as elsewhere: a stale value only refuses more
     if (g_gw_all > done) return 1;
     for (uint64_t pg = lo >> 12; pg <= (hi - 1) >> 12; pg++) { unsigned s = gw_slot(pg); if ((g_gw[s].page == pg || g_gw[s].page == ~0ull) && g_gw[s].fence > done) return 1; }
     return 0;
 }
+static int gwu_live(uint64_t lo, uint64_t hi, uint64_t done) {
+    if (g_gwu_all > done) return 1;
+    for (uint64_t pg = lo >> 12; pg <= (hi - 1) >> 12; pg++) { unsigned s = gw_slot(pg); if ((g_gwu[s].page == pg || g_gwu[s].page == ~0ull) && g_gwu[s].fence > done) return 1; }
+    return 0;
+}
 // The submission's GPU writes go into the page table with its fence (mtl_sub_commit)
 static void gw_commit(uint64_t fence) {
     uint64_t done = g_done;
     if ((g_pend_over || g_sbw_over) && fence > g_gw_all) g_gw_all = fence;
-    for (int e = 0; e < g_npend; e++) gw_put(g_pend_lo[e], g_pend_hi[e], fence, done);
-    if (g_nsbw) for (int i = 0; i < SBW_N; i++) if (g_sbwp[i].gen == g_pend_gen) gw_put(g_sbwp[i].page << 12, (g_sbwp[i].page + 1) << 12, fence, done);
-    for (int i = 0; i < g_nsbw_w; i++) gw_put(g_sbw_wlo[i], g_sbw_whi[i], fence, done);
+    if ((g_pend_over || g_sbw_over) && fence > g_gwu_all) g_gwu_all = fence;
+    int drop = 0; while (drop < g_nkw && g_kw[drop].fence <= done) drop++;
+    if (drop) { memmove(g_kw, g_kw + drop, (size_t)(g_nkw - drop) * sizeof *g_kw); g_nkw -= drop; }
+    int known = 0; for (int e = 0; e < g_npend; e++) if (g_pend_kind[e] == 1 && g_pend_upd[e]) known++;
+    int keep = !g_pend_over && g_nkw + known <= KW_N;
+    if (!keep && fence > g_gwu_all) g_gwu_all = fence;
+    for (int e = 0; e < g_npend; e++) {
+        gw_put(g_pend_lo[e], g_pend_hi[e], fence, done);
+        if (g_pend_kind[e] == 1 && g_pend_upd[e]) {
+            if (keep) { const upd_ent *u = &g_upd[g_pend_upd[e] - 1]; g_kw[g_nkw++] = (kw_ent){g_pend_lo[e], g_pend_hi[e], fence, (const uint8_t *)u->buf.contents + u->off}; }
+        } else gwu_put(g_pend_lo[e], g_pend_hi[e], fence, done);
+    }
+    if (g_nsbw) for (int i = 0; i < SBW_N; i++) if (g_sbwp[i].gen == g_pend_gen) { gw_put(g_sbwp[i].page << 12, (g_sbwp[i].page + 1) << 12, fence, done); gwu_put(g_sbwp[i].page << 12, (g_sbwp[i].page + 1) << 12, fence, done); }
+    for (int i = 0; i < g_nsbw_w; i++) { gw_put(g_sbw_wlo[i], g_sbw_whi[i], fence, done); gwu_put(g_sbw_wlo[i], g_sbw_whi[i], fence, done); }
 }
 // The writes queued in this submission from index since on that overlap [a, b), newest first, into out (room for every entry a lookup can meet); -1 when they cannot all be told
 static int pend_since(uint64_t a, uint64_t b, int since, int *out) {
@@ -1206,7 +1235,8 @@ static int ubp_get(uint64_t lo, uint64_t hi, uint64_t *gpu, const uint8_t **cpu)
     if (!c || c->sbw != g_sbw_gen) { if (g_sbw_over || sbw_hits(lo, hi)) { g_ubp_why[1]++; return 0; } if (c) c->sbw = g_sbw_gen; }
     if (c && c->npend == g_npend) { g_ubp_reused++; *gpu = c->gpu; *cpu = c->cpu; g_ubp_ready = c->ready; return 1; }
     int since = c ? c->npend : 0;
-    if (!c && gw_live(lo, hi)) { g_ubp_why[2]++; return 0; }
+    uint64_t kdone = g_done;
+    if (!c && gwu_live(lo, hi, kdone)) { g_ubp_why[2]++; return 0; }
     if (!c && !nvn_host_readable(lo, hi - lo)) { g_ubp_why[4]++; return 0; }
     int n = pend_since(lo, hi, since, g_ubp_idx); if (n < 0) { g_ubp_why[4]++; return 0; }
     // Newest first, keep the writes that still show through somewhere (a write only newer ones cover is never read, whatever wrote it); stop once they cover the range
@@ -1228,6 +1258,10 @@ static int ubp_get(uint64_t lo, uint64_t hi, uint64_t *gpu, const uint8_t **cpu)
     int defer = len >= 512 && ubc_on(); uint64_t ready = 0;   // small ones (bindless handles read on the CPU) are copied here
     if (defer) ready = ubc_push(d, c ? c->cpu : (const uint8_t *)(uintptr_t)lo, (size_t)len);   // the previous shadow's own copies are queued before these
     else { if (c) ubc_wait(c->ready); memcpy(d, c ? c->cpu : (const uint8_t *)(uintptr_t)lo, (size_t)len); }
+    if (!c) for (int i = 0; i < g_nkw; i++) { const kw_ent *k = &g_kw[i];
+        if (k->fence <= kdone || k->hi <= lo || hi <= k->lo) continue;
+        uint64_t x = k->lo > lo ? k->lo : lo, y = k->hi < hi ? k->hi : hi;
+        if (defer) ready = ubc_push(d + (x - lo), k->src + (x - k->lo), (size_t)(y - x)); else memcpy(d + (x - lo), k->src + (x - k->lo), (size_t)(y - x)); }
     for (int i = nk - 1; i >= 0; i--) { int e = g_ubp_idx[i]; const upd_ent *u = &g_upd[g_pend_upd[e] - 1];   // oldest first: each byte ends with the newest write
         uint64_t x = g_pend_lo[e] > lo ? g_pend_lo[e] : lo, y = g_pend_hi[e] < hi ? g_pend_hi[e] : hi;
         const uint8_t *src = (const uint8_t *)u->buf.contents + u->off + (x - u->lo);
