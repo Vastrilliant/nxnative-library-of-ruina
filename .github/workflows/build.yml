@@ -11,6 +11,14 @@ on:
         description: "Extra build_ipa_from_nsp.py options, e.g. --romfs separate  or  -p v0"
         required: false
         type: string
+      romfs_mode:
+        description: "separate = leave the game files out of the IPA (copy your own romfs.img to the phone); bundle = pack them in"
+        required: true
+        default: separate
+        type: choice
+        options:
+          - separate
+          - bundle
       refresh_cache:
         description: "Ignore the cached game files and download them again"
         required: true
@@ -46,6 +54,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Normalize tool timestamps
+        run: |
+          set -eo pipefail
+          find dm/gfx/tools -type f -exec touch -h -d "2020-01-01T00:00:00Z" {} +
 
       - name: Toolchain
         run: |
@@ -246,18 +259,46 @@ jobs:
           test -s "$out"
           echo "prod.keys: $(wc -c < "$out") bytes, $(wc -l < "$out") lines"
 
+      - name: Restore shader cache
+        id: shcache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/work/shader
+          key: nxshader-v1-${{ steps.links.outputs.hash }}-${{ hashFiles('dm/gfx/**', 'dm/games/**', 'scripts/build_ipa_from_nsp.py') }}
+          restore-keys: |
+            nxshader-v1-${{ steps.links.outputs.hash }}-
+
       - name: Build IPA
         env:
           APP_NAME: ${{ inputs.app_name }}
           EXTRA_ARGS: ${{ inputs.extra_args }}
+          ROMFS_MODE: ${{ inputs.romfs_mode }}
         run: |
           set -eo pipefail
           GAME_DIR="$HOME/game"
-          args=("$GAME_DIR" -k "$RUNNER_TEMP/prod.keys" -o "$GAME_DIR/nxnative.ipa" --no-keep-extracted --progress lines)
+          WORK_DIR="$HOME/work"
+          mkdir -p "$WORK_DIR"
+          args=("$GAME_DIR" -k "$RUNNER_TEMP/prod.keys" -o "$GAME_DIR/nxnative.ipa" --work-dir "$WORK_DIR" --keep-extracted --romfs "$ROMFS_MODE" --progress lines)
           if [ -n "$APP_NAME" ]; then args+=(--app-name "$APP_NAME"); fi
           # shellcheck disable=SC2086
           python3 scripts/build_ipa_from_nsp.py "${args[@]}" $EXTRA_ARGS
           ls -lh "$GAME_DIR/nxnative.ipa"
+
+      - name: Save shader cache
+        if: ${{ success() && steps.shcache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ~/work/shader
+          key: nxshader-v1-${{ steps.links.outputs.hash }}-${{ hashFiles('dm/gfx/**', 'dm/games/**', 'scripts/build_ipa_from_nsp.py') }}
+
+      - name: Show RomFS image identity
+        if: ${{ inputs.romfs_mode == 'separate' }}
+        run: |
+          set -eo pipefail
+          for img in "$HOME"/work/extract/*/RomFS.img; do
+            echo "$img"
+            python3 -I dm/tools/romfs_image.py --identity "$img"
+          done
 
       - name: Package output
         env:
@@ -295,7 +336,7 @@ jobs:
         with:
           name: build-logs
           path: |
-            ~/game/*_build/**/*.log
-            ~/game/*_survey/**
+            ~/work/logs/**
+            ~/work/profile/**
           if-no-files-found: ignore
           retention-days: 3
