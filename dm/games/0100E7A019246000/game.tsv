@@ -1,0 +1,38 @@
+# Library of Ruina (Switch, update 1.0.3 = v262144). Plays on the Mac; reported working on an iPhone.
+# Format: see dm/games/README.md
+# Unity 2021.3.19f1 IL2CPP, FMOD, SDK 15.3.2, NVN. subsdk0 is NintendoSDK_movie.
+
+# ---- Identity ----
+title_id	0100E7A019246000
+program_id	0100E7A019246000
+
+# ---- App ----
+name	Library of Ruina
+ipa	LibraryOfRuina.ipa
+app_category	public.app-category.games
+
+# ---- Versions ----
+build	v262144	1.03	main=aeea627ddbd1214764dfef5f965e94a2	subsdk0=368f01d5cb42f06cd125dc739d036719	sdk=8618895246b420329b77746b960a66ab
+package	v262144
+shader_versions	v262144
+
+# ---- Files ----
+# every module main imports from
+modules	main subsdk0 sdk
+romfs_marker	Data/resources.resource
+zip_store	.assets:.bundle:.dat:.json:.png:.pres:.resource:.ress:.metallib
+
+# ---- Memory ----
+# NPDM: 16 MB of system resource, virtual address memory. No heap is set in the Mac check.
+# Unity's thread pool grows with load: 12 workers of 8 MB each on an iPhone 13 Pro Max against 2 on
+# the Mac, and a 256 MB stack region then has no place for a stack ([Memory](README.md#memory)).
+mem_reserve	0x140000000
+mem_alias	0x100000000
+mem_stack	0x28000000
+app_pool	0x40000000
+sys_resource	0x1000000
+
+# ---- Shader split ----
+shader_groups	/Data/=data
+shader_note	Library of Ruina shaders
+
