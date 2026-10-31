@@ -79,6 +79,14 @@ To enroll a cut for any game's own module:
 - **Fix:** in its last pass (`far_base`), `jump_offsets` accepts `cmp xI, #N` on the index too. The earlier passes are unchanged, so modules that rewrote before come out the same.
 - **Found on:** [OCTOPATH TRAVELER](../../dm/games/010057D006492000/README.md) `main+0x1676f58` (1.0.5), the only such site in that `main`.
 
+### Index zero-extended after a 32-bit bounds check
+
+- **Symptom:** `jump table <addr>` assertion in `patch_nso.py` where the index is made with a 64-bit `and` by `0xffffffff` after the check (`cmp w8, #4; b.hi; and x18, x8, #0xffffffff; ldrsw x18, [x16, x18, lsl #2]; add x18, x18, x16; br x18`).
+- **Cause:** `jump_offsets` took the `and` as a mask and looked for the same mask on the checked register, which has none, so no form matched.
+- **Fix:** a 64-bit `and` with `0xffffffff` zero-extends the source's low 32 bits. `jump_zero_extended` recognizes a 32-bit `cmp` of that source followed by `b.hi` out of the dispatch. The source stays unchanged up to the mask, the index up to the load, the loaded entry and base up to the add, and `x18` up to the branch. Calls, system calls, traps, other intervening control flow, undecodable gaps, and known entries past the check are rejected; the table must fit in the image and every target must be a decoded instruction outside the guarded run (or its check).
+- **Check:** this is a separate fallback after every earlier recognizer fails. Adding the rule inside `jump_offsets` before its existing searches could change a previously recognized table's extent by selecting a nearer compare. The fallback preserves those earlier results; synthetic full-rewriter tests cover both the new five-entry form and an existing eight-entry match with a nearer five-entry check.
+- **Found on:** Mario Tennis Aces (0100BDE00862A000) `main+0x35837c` (1.0.0), a five-entry table whose targets all lie in the function ([PR #778](https://github.com/seedds/nxnative/pull/778)). The contributor reported that `main`, `subsdk0` and `sdk` rewrite with zero-extension recognition; gameplay validation remains open.
+
 ### Index masked in the block that branches to the dispatch
 
 - **Symptom:** `jump table <addr>` assertion in a Unity / IL2CPP `main` whose dispatch checks a fresh mask of another register than the one it indexes with.
@@ -330,6 +338,16 @@ To enroll a cut for any game's own module:
 - **Cause:** shader builds use a writable profile copy for generated tables. Passing that copy to the rewriter exposes its `patches.py` alongside the revision's original, registering every cut twice.
 - **Fix:** registered games rewrite with the revision's original profile; provisional games retain their external profile path. Shader builds continue using their writable copies. The harness regression covers both selections.
 - **Found on:** [NieR:Automata geometry review](../../dm/games/010056B015FE8000/README.md#geometry-optimization-review), when comparing rewrites after reconciling PRs #336 and #416.
+
+## Rewriter performance
+
+### Parallel scans preserve rewrite output
+
+- **Symptom:** packing spends most of the rewrite step on the x18 scan and the spin-wait search, using one core per module. Cancelling a parallel rewrite can leave its workers running; `DM_REWRITE_J=0` or a negative value can silently omit spin gates, and the NSP script can ignore an explicit worker limit.
+- **Cause:** both searches analyse an unchanged image, but ran sequentially. A default SIGTERM exits without unwinding the pool's context manager. The spin search's job count assumed a positive worker count, and the NSP script always replaced the caller's setting with its automatic budget.
+- **Fix:** `patch_nso.py` scans code ranges in 1 MB pieces and distributes spin candidates across forked workers. Each pool inherits the image and analysis state at that pass; workers return addresses, and the parent rebuilds accepted spin regions in address order before emitting patches. SIGTERM exits through Python's cleanup so the pool terminates and joins its children. `DM_REWRITE_J` must be a positive integer (`1` runs serially), checked before loading modules; the NSP script honours an explicit value and otherwise chooses its budget from the core and module counts. These changes apply to every NSO and NRO; patch selection and runtime semantics stay the same.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game).
+- **Check:** synthetic tests cover SIGTERM during active pool jobs, invalid counts and explicit worker limits through the packing script. The original speed measurements and module comparisons are in [PR #761](https://github.com/seedds/nxnative/pull/761); their timings are contributor measurements, not local regression results. Local game validation is recorded in Breath of the Wild's note; other games and NROs have no new local runtime validation here.
 
 ## Checking a rewriter change
 
