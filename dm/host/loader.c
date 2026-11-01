@@ -201,6 +201,7 @@ static void read_layout(module_t *m, const char *dir) {
         else if (!strcmp(key, "TEXT_END")) m->text_end = v;
         else if (!strcmp(key, "RO_OFF")) m->ro_off = v;
         else if (!strcmp(key, "DATA_OFF")) m->data_off = v;
+        else if (!strcmp(key, "MODSW_OFF")) m->modsw_off = v;
         else if (!strcmp(key, "FPS_STATE_OFF")) m->fps_state_off = v;
         else if (!strcmp(key, "UE_MALLOC_VT")) m->ue_malloc_vt = v;
         else if (!strcmp(key, "UE_MALLOC_SLOT")) m->ue_malloc_slot = (unsigned)v;
@@ -250,6 +251,12 @@ void dm_fps_state_apply(void) {
     char cap[32]; snprintf(cap, sizeof cap, ", capped at %d fps", t);
     LOG("%s: frame step %s%s (%s)", g_fps_mod, !t ? "as the game sets it" : "in whole vsyncs decided by the host", t ? cap : "", e ? "DM_FPS_TARGET" : "game profile fps_target");
 }
+// The mods' switch bytes (the page after the key page, read-write, zero in the file; patch_nso.py "Switchable patches"): the rewriter's stubs run a mod's patched word when its byte is 1. hle_modsw.c writes them at the start
+uint8_t *dm_modsw;
+static void install_modsw(module_t *m) {
+    if (m->modsw_off + 0x1000 > m->size || m->modsw_off < m->key_page_off + m->key_page_size) die("%s: mod switch page out of range", m->name);
+    dm_modsw = m->base + m->modsw_off;
+}
 static void install_key_page(module_t *m) {
     if (m->key_page_off + m->key_page_size > m->size) die("%s: key page out of range", m->name);
     uint64_t *page = (uint64_t *)(m->base + m->key_page_off);
@@ -258,6 +265,7 @@ static void install_key_page(module_t *m) {
     for (int k = 0; k < KEY_N; k++) if (!page[m->key_idx[k]]) die("%s: key page entry %d is 0 (host key not created) -- the game would read TSD slot 0", m->name, k);
     if (mprotect(m->base + m->key_page_off, m->key_page_size, PROT_READ)) die("%s key page mprotect", m->name);
     if (m->fps_state_off) install_fps_state(m);
+    if (m->modsw_off) install_modsw(m);
 }
 
 static void register_gates(module_t *m, const char *dir) {

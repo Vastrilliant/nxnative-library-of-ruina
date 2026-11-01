@@ -1,0 +1,27 @@
+{
+  "id": "patty-optimization",
+  "title": "Patty Optimization (Library of Ruina)",
+  "description": "The Switch exefs patch Patty Optimization of Library-of-Ruina-NX-Mods, including its Crying Children variant, for Library of Ruina 1.0.3.",
+  "launcher": {
+    "env": "DM_MOD_PATTYOPT",
+    "label": "Patty Optimization",
+    "note": "Several Unity-engine based optimization fixes, original mod by [PattyHoswell’s NexusMods page](https://www.nexusmods.com/libraryofruina/mods/174)"
+  },
+  "game": "Library of Ruina 1.0.3",
+  "exefs": "exefs",
+  "expect": {
+    "aeea627ddbd1214764dfef5f965e94a2": {
+      "0x243e110": "d10203ff",
+      "0x2440808": "f9406260",
+      "0x2440fa8": "f9406260",
+      "0x244d1e0": "d10183ff",
+      "0x244d340": "d10203ff",
+      "0x244d510": "d10183ff",
+      "0x244d670": "d10203ff",
+      "0x244d970": "6dbb2beb",
+      "0x244daf0": "6dba33ed",
+      "0x244dbe0": "a9be7bfd",
+      "0x244dc60": "a9bf7bfd"
+    }
+  }
+}

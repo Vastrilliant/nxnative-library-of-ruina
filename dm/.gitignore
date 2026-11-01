@@ -11,3 +11,7 @@ tools/nx_extract/obj/
 tools/nx_extract/bin/
 third_party/ryujinx/**/obj/
 third_party/ryujinx/**/bin/
+# Written by scripts/apply_mods.py for the selected mods
+host/hle_mod_*.c
+host/hle_mods_gen.h
+host/hle_modsw_gen.h

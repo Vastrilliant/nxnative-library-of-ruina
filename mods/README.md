@@ -15,4 +15,19 @@ How it works: `scripts/apply_mods.py` numbers the gates (32-63), copies `host.c`
 
 Add a mod: copy `speed-dice/`, change the id, gates and `host.c`.
 
+## Exefs patch mods
+
+A mod with an `exefs` entry in its `mod.json` is made of Atmosphère exefs patches, the `.ips` / IPS32 and `.pchtxt` files as their author distributes them (Library-of-Ruina-NX-Mods), and needs no `host.c`:
+
+```
+mods/<id>/
+  mod.json   id, title, launcher (env, label, note), exefs (the folder of the patch files)
+  expect     optional: {build ID: {text offset: the game's original word}} for every patched word; apply_mods.py checks it covers the patches and the rewriter stops when the game's word differs (a wrong offset or build)
+  exefs/     <NSO build ID>.ips (64 hex digits, the name Atmosphère uses) and / or *.pchtxt (@nsobid- line, hex patches, offset_shift as the file sets it)
+```
+
+Every word a patch changes becomes a switchable patch: `scripts/apply_mods.py` lists the words in `patches.json` (`SWITCH`, with the text offset, the mod's switch number and the patched word), and the rewriter (`dm/tools/patch_nso.py`, "Switchable patches"; stubs in `dm/tools/nso_switch.py`) replaces the instruction with a branch to a stub that runs the patched word when the mod's switch byte is 1 and the game's own word otherwise. `dm/host/hle_modsw.c` writes the bytes when the game starts from the mods' env switches (the Mods section of the launcher, `Documents/env.txt` wins), so with every switch off the game runs as it does without the mods. The choice is made at run time because the iPhone cannot write to code pages. A change takes effect at the next start, as for the other mods.
+
+Offsets: an `.ips` file counts from the start of the NSO file (Atmosphère takes the 0x100-byte header off), a `.pchtxt` counts as `offset_shift` says; both give the text offset the rewriter uses (the same as the `obs` rows of the other mods). A patch must cover whole instructions at 4-byte aligned offsets, and only the build named in its file is patched (Library of Ruina 1.0.3, build ID `aeea627d...`). The rewrite log lists each site with the instruction it replaces (`switch N at ...`), and `main.switch.tsv` beside the rewritten modules has the same list: check a new patch's sites there. A site that is already a rewrite site (an x18, tpidr or svc instruction, a lock acquire) or an instruction the stub cannot move (`ldr` literal) stops the rewrite with a message.
+
 On the device: the workflow uploads `mod-romfs`; copy its contents (the `Data/` folder) into the app's `Documents/` and add `DM_ROMFS_OVERLAY=<the folder that contains Data/>` to `env.txt` (the path of `Documents`, not of `Documents/Data`). Then switch the mod on under Mods.

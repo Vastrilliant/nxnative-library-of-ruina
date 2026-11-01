@@ -1,0 +1,17 @@
+{
+  "id": "skip-intro",
+  "title": "Skip Intro (Library of Ruina)",
+  "description": "The Skip Intro exefs patch of Library-of-Ruina-NX-Mods (the author's personal patch), for Library of Ruina 1.0.3.",
+  "launcher": {
+    "env": "DM_MOD_SKIPINTRO",
+    "label": "Skip Intro",
+    "note": "Automatically skips the AMV on startup, original mod by trilliance"
+  },
+  "game": "Library of Ruina 1.0.3",
+  "exefs": "exefs",
+  "expect": {
+    "aeea627ddbd1214764dfef5f965e94a2": {
+      "0x16f3d24": "f9401260"
+    }
+  }
+}

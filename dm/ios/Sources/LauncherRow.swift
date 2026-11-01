@@ -24,7 +24,7 @@ struct SettingRow: View {
     private var settingLabel: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(s.label)
-            if !note.isEmpty { Text(note).font(.footnote).foregroundStyle(.secondary) }
+            if !note.isEmpty { Text(LocalizedStringKey(note)).font(.footnote).foregroundStyle(.secondary) }
         }
     }
 

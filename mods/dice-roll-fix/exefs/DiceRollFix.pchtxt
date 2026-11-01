@@ -1,0 +1,10 @@
+@nsobid-AEEA627DDBD1214764DFEF5F965E94A200000000000000000000000000000000
+
+@flag offset_shift 0x100
+@enabled
+
+// Dice Roll Fix (port of PC mod by uGuardian): MakeDiceResult -> UnityEngine.Random.Range(min, max+1)
+// min>max clamps to max; tuneLevel ignored (unused in vanilla)
+01DB1CC0 1F00016B00B0811A2104001135283914
+
+@stop

@@ -10,6 +10,7 @@
 #   spin wait loops     → a copy whose back-edges pass a spin gate (the host yields there; a busy poll costs nothing on the Switch, see "Spin waits")
 #   Registered cuts (CUTS of the patch files, restricted by NSO build ID, see "Registered patches"): before rewriting, the original bytes are asserted one by one and any mismatch aborts; results are listed in <name>.cuts.tsv
 #   Function-matched cuts (MATCH_CUTS of the selected game's patches.py): unknown builds only, unique complete-function and direct-callee fingerprints, then original-byte assertions
+#   Switchable patches (SWITCH of DM_MODS_PATCHES, the exefs patches of the selected mods, see "Switchable patches"): a site's instruction becomes a stub that runs the patched word or the original by a switch byte the host sets at the start; listed in <name>.switch.tsv
 #   Registered observation gates (OBS of the patch files, restricted by build ID): one instruction at the entry is replaced with "enter the host observation callback → execute the original instruction → jump back", so diagnostics modify zero code at runtime; listed in <name>.obs.tsv
 # The key page only stores "actual key number × 8" at the end of the data segment, and patch code fetches thread slots indirectly through the key page: the loader may use any key number.
 # Output: <name>.patched.bin (key page and patch area appended after the image at PATCH_OFF; when that would start beyond 112 MB the patch area sits before the base, see FAR; a text longer than a B reaches adds a second one after the image, see TWO), <name>.fixups.tsv (layout and key page index header), <name>.gates.tsv, <name>.sites.tsv, <name>.cuts.tsv, <name>.obs.tsv, <name>.changed.tsv (the text words whose instructions no longer run as the file has them)
@@ -20,7 +21,7 @@ if capstone.cs_version()[0] != 5:   # the rewriter uses Capstone 5's names (CS_A
     sys.exit(f'[RED] Capstone {capstone.__version__} is unsupported; the rewriter requires Capstone 5.x. Run: {shlex.join([sys.executable, "-m", "pip", "install", "capstone>=5,<6"])}')
 from capstone import *
 from capstone.arm64 import ARM64_OP_IMM, ARM64_OP_MEM, ARM64_OP_REG
-import nso, nso_asm
+import nso, nso_asm, nso_switch
 from nso_asm import *   # the instruction encoders (B, ADRP, LDRX, ...), shared with the per-build patch files
 
 # The NSP script terminates a failed or cancelled rewrite with SIGTERM. Exit through the pool's context manager so it reaps the workers too.
@@ -30,10 +31,17 @@ except ValueError: sys.exit('[RED] DM_REWRITE_J must be a positive integer')
 if WORKERS < 1: sys.exit('[RED] DM_REWRITE_J must be a positive integer')
 
 src, outdir, NAME = sys.argv[1], sys.argv[2], sys.argv[3]
+# Switchable patches of the mods the build selected (scripts/apply_mods.py writes DM_MODS_PATCHES: {"SWITCH": {build ID: [[offset, switch index, patched word as 8 hex digits, reason], ...]}}, see "Switchable patches"):
+# read before the layout, because a build that has some gets a page for their switches
+_MODS_JSON = {}
+if os.environ.get('DM_MODS_PATCHES'):
+    import json
+    with open(os.environ['DM_MODS_PATCHES'], encoding='utf-8') as _f: _MODS_JSON = json.load(_f)
 # An NSO, or an NRO (a module the game loads at run time with nn::ro, Super Smash Bros. Ultimate's fighter code), rewritten as an NSO of the same layout would be. nso.py checks the file
 # against its header before anything is allocated (a damaged module stops here with a [RED] line)
 MOD = nso.cli_read(src)
 bss = MOD.bss
+SWITCH_ROWS = [(int(r[0]), int(r[1]), int(r[2], 16), str(r[3]), int(r[4], 16) if len(r) > 4 and r[4] else None) for r in _MODS_JSON.get('SWITCH', {}).get(MOD.build_id[:0x10].hex(), [])]
 # Every jump between the patch area and the code is a B (±128 MB). A patch area appended after the image (with bss) cannot reach the code when it would start beyond 112 MB (leaving 16 MB for the patch area): Metroid Dread's main has about 1.8 GB of bss (the engine's static heap); Engage's main starts its patch area at about 103 MB and keeps it after the image.
 # The patch area then sits FRONT bytes before the module base (PATCH_OFF is negative), and the output file holds only text + ro + data (FILE_IMAGE_LEN) followed by the patch area; the loader supplies zero pages for bss and the key page (IMAGE_SIZE is the whole image).
 # The key page stays after bss (the patch area reaches it through ADRP, ±4 GB). Modules below the limit produce output byte-identical to before
@@ -60,10 +68,12 @@ if FAR:
     FILE_IMAGE_LEN = (len(IMG) + 0x3FFF) & ~0x3FFF
     KEY_PAGE_OFF = (len(IMG) + bss + 0x3FFF) & ~0x3FFF
     IMAGE_SIZE, PATCH_OFF = KEY_PAGE_OFF + 0x4000, -FRONT
+    if SWITCH_ROWS: IMAGE_SIZE = KEY_PAGE_OFF + 0x8000   # the state page after the key page
     BACK_OFF = (KEY_PAGE_OFF + 0x8000 + 0xFFFF) & ~0xFFFF if TWO else 0   # after the key page and the frame step page FRAME_STEP may take
 else:
     KEY_PAGE_OFF = (len(IMG) + 0x3FFF) & ~0x3FFF
     IMG.extend(bytes(0x4000))
+    if SWITCH_ROWS: IMG.extend(bytes(0x4000))   # the state page after the key page
     PATCH_OFF = (len(IMG) + 0xFFFF) & ~0xFFFF
     IMAGE_SIZE = BACK_OFF = 0   # only the layout with the patch area before the base has them
 
@@ -1214,6 +1224,27 @@ for off, oid, ow, why in obs:
     assert off < TEXT_END and off not in kinds and not any(lo <= off < hi for wseg in windows for lo, hi in [(wseg[0].address, wseg[-1].address + 4)]), f'observation gate conflicts with a rewrite site {off:#x}'
     use_area(off); put_branch(off, site_obs(off, oid, w)); stat('obs')
 
+# ---- Switchable patches (mods/<id>/exefs: Atmosphere exefs patches, .ips / .pchtxt, that the player turns on in the launcher's Mods section) ----
+# Each word a mod patches becomes a branch to a stub (dm/tools/nso_switch.py) that reads the mod's byte in the state page (+0x100 + the mod's index; the host writes 1 there at the start when the mod's env switch is 1,
+# dm/host/hle_modsw.c) and runs the patched word when it is 1, the original word otherwise: with every switch off the game runs as unpatched. Unlike a registered cut, the choice is made at run time, which the iPhone needs
+# (its code pages can never be written). A site may not be a rewrite site (an x18, tpidr or svc instruction, a lock acquire, a window) nor one another switchable patch uses; an instruction the stub cannot move stops the rewrite
+MODSW_OFF = KEY_PAGE_OFF + 0x4000 if SWITCH_ROWS else 0   # the page after the key page: the frame step state (FRAME_STEP) uses its first 0x40 bytes
+switches = []
+for off, idx, nw, why, want in SWITCH_ROWS:
+    ow = struct.unpack_from('<I', IMG, off)[0]
+    assert want is None or ow == want, f'switchable patch at {off:#x} ({why}): the game has {ow:08x} there, the mod expects {want:08x}; the offset or the build is wrong'
+    assert off % 4 == 0 and 0 <= off < TEXT_END, f'switchable patch outside the text {off:#x}'
+    assert all(o != off for o, _, _, _, _ in switches), f'two switchable patches change the word at {off:#x}'
+    assert off not in kinds and not any(lo <= off < hi for wseg in windows for lo, hi in [(wseg[0].address, wseg[-1].address + 4)]), f'switchable patch conflicts with a rewrite site {off:#x}'
+    for w, what in ((ow, 'original'), (nw, 'patched')):
+        assert not has18(dis(w, off)), f'switchable patch at {off:#x}: the {what} instruction {w:08x} uses x18'
+    use_area(off); st = here()
+    try: words = nso_switch.stub(st, off, idx, ow, nw, MODSW_OFF)
+    except ValueError as e: sys.exit(f'[RED] switchable patch at {off:#x} ({why}): {e}')
+    for w in words: emit(w)
+    put_branch(off, st); stat('switch'); switches.append((off, idx, ow, nw, why))
+for off, idx, ow, nw, why in switches: print(f'{NAME}: switch {idx} at {off:#x}: {dis(ow, off).mnemonic} {dis(ow, off).op_str} -> {dis(nw, off).mnemonic} {dis(nw, off).op_str} ({why})')
+
 # ---- Address regions (every module that defines the SDK's VammManager: sdk) ----
 # Three observation gates, found by the SDK's own symbols in any build, let the host keep the table of address regions (hle_svc.c "Address regions"): the alias region space each takes,
 # who asked for it and how much of it is used. They only read registers. VammManager::AllocateAddressRegion(this, uintptr_t *out, size_t size): at its entry the size (x2) and the caller's
@@ -1627,6 +1658,7 @@ with open(P('fixups.tsv'), 'w') as f:
     if FAR: f.write(f'# IMAGE_SIZE\t{IMAGE_SIZE:#x}\n# FILE_IMAGE_LEN\t{FILE_IMAGE_LEN:#x}\n')   # patch area before the base (negative PATCH_OFF): whole image size, length of the image part of the file
     if TWO: f.write(f'# BACK_OFF\t{BACK_OFF:#x}\n# BACK_LEN\t{BACK_LEN:#x}\n')   # the back patch area (TWO): its offset in the image, and its length, the last bytes of the file
     for k in KEY_INDEX: f.write(f'# KEY_{k}_IDX\t{KEY_INDEX[k]}\n')
+    if MODSW_OFF: f.write(f'# MODSW_OFF\t{MODSW_OFF:#x}\n')   # the mods' switch bytes (Switchable patches): the loader gives the host the page, which writes them at the start from the env switches
     if FS_STATE_OFF: f.write(f'# FPS_STATE_OFF\t{FS_STATE_OFF:#x}\n')   # frame step state page (FRAME_STEP): the loader writes the target fps there
     if UE_CALL is not None: f.write(f'# UE_MALLOC_VT\t{UE_VT:#x}\n# UE_MALLOC_SLOT\t{UE_SLOT:#x}\n')   # Unreal's FMallocBinned3 (ue_malloc.py): its vtable and the slot of its name getter, which names the slot layout
     for n, o in UE_CVARS.items(): f.write(f'# UE_CVAR:{n}\t{o:#x}\n')   # Unreal console variables (ue_cvar.py): the TAutoConsoleVariable registered under each name
@@ -1670,8 +1702,11 @@ def changed_runs():
 with open(P('changed.tsv'), 'w') as f:
     f.write(f'# BUILD_ID\t{BUILD_ID}\n')
     for off, n in changed_runs(): f.write(f'{off:#x}\t{n:#x}\n')   # Columns: offset, length in bytes
+with open(P('switch.tsv'), 'w') as f:
+    f.write(f'# BUILD_ID\t{BUILD_ID}\n')
+    for off, idx, ow, nw, why in switches: f.write(f'{off:#x}\t{idx}\t{ow:08x}\t{nw:08x}\t{why}\n')   # Columns: offset, mod switch index, original word, patched word, reason
 with open(P('obs.tsv'), 'w') as f:
     f.write(f'# BUILD_ID\t{BUILD_ID}\n')
     for off, oid, ow, why in obs: f.write(f'{off:#x}\t{oid}\t{ow}\t{why}\n')
-print(NAME, stats, 'cuts', len(cuts), 'obs', len(obs), 'patch', len(patch_front) + len(patch_back), 'PATCH_OFF', hex(PATCH_OFF), *(('BACK_OFF', hex(BACK_OFF), 'back', len(patch_back)) if TWO else ()), 'slot_refs', len(fix), 'gates', len(gates))
+print(NAME, stats, 'cuts', len(cuts), 'obs', len(obs), 'switch', len(switches), 'patch', len(patch_front) + len(patch_back), 'PATCH_OFF', hex(PATCH_OFF), *(('BACK_OFF', hex(BACK_OFF), 'back', len(patch_back)) if TWO else ()), 'slot_refs', len(fix), 'gates', len(gates))
 if DATA_BLOCKS: print(NAME, 'data blocks left alone:', ', '.join(f'{s:#x}..{e:#x}' for s, e in DATA_BLOCKS))
