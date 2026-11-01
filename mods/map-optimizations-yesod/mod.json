@@ -20,9 +20,9 @@
     "aeea627ddbd1214764dfef5f965e94a2": [
       {"gate": "start_pre", "offset": "0x244dca0", "word": "a9bd7bfd", "reason": "YesodMapManager.Start entry: x0 = the map"},
       {"gate": "enable_pre", "offset": "0x243f600", "word": "d10203ff", "reason": "MapManager.EnableMap entry: x0 = the map, remembered"},
-      {"gate": "enable_ret1", "offset": "0x243f800", "word": "d65f03c0", "reason": "MapManager.EnableMap, first return"},
-      {"gate": "enable_ret2", "offset": "0x243f910", "word": "d65f03c0", "reason": "MapManager.EnableMap, second return"},
-      {"gate": "quake_post", "offset": "0x244e508", "word": "90016bc8", "reason": "after YesodMapManager.ActiveSpark in <EarthQuake>.MoveNext: x20 = the map"}
+      {"gate": "enable_ret1", "offset": "0x243f7fc", "word": "910203ff", "reason": "MapManager.EnableMap, the add sp just before the first return (a ret itself cannot take a gate)"},
+      {"gate": "enable_ret2", "offset": "0x243f90c", "word": "910203ff", "reason": "MapManager.EnableMap, the add sp just before the second return"},
+      {"gate": "quake_post", "offset": "0x244e50c", "word": "f9440908", "reason": "two instructions after the YesodMapManager.ActiveSpark call in <EarthQuake>.MoveNext (the adrp in between cannot take a gate): x20 = the map"}
     ]
   }
 }
