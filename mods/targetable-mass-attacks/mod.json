@@ -1,0 +1,39 @@
+{
+  "id": "targetable-mass-attacks",
+  "title": "Targetable Mass Attacks (Library of Ruina)",
+  "description": "Port of Cyaminthe's Targetable Mass Attacks (Workshop 2803192752) as host callbacks on observation gates: R3 on a speed die that holds a mass attack opens a selector for its sub-targets, one arrow after the other. For Library of Ruina 1.0.3.",
+  "launcher": {
+    "env": "DM_MOD_TARGETABLEMASSATTACKS",
+    "label": "Targetable Mass Attacks",
+    "note": "Allows you to individually adjust sub-targets of Mass Attacks, activate by pressing R3 on a dice that’s using one. Original mod by [Cyaminthe’s Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=2803192752)"
+  },
+  "game": "Library of Ruina 1.0.3",
+  "gates": [
+    "frame_pre",
+    "ui_pre"
+  ],
+  "host": "host.c",
+  "obs": {
+    "_comment": "main build ID (first 16 bytes of the module ID, 32 hex digits) -> rows {gate, offset, word, reason}; word = the 4 bytes at offset read as a little-endian u32. Offsets are the RVAs of dump.cs (main = RVA + 0x234000 in the DmIOS file).",
+    "aeea627ddbd1214764dfef5f965e94a2": [
+      {
+        "gate": "frame_pre",
+        "offset": "0x23544f0",
+        "word": "a9bd7bfd",
+        "reason": "BattleUnitTargetArrowManagerUI.Update entry (once a frame in a battle): x0 = the arrow manager; the R3 key, the selector's input and its per-frame checks run here"
+      },
+      {
+        "gate": "ui_pre",
+        "offset": "0x27aab40",
+        "word": "a9be7bfd",
+        "reason": "BattleManagerUI.Init entry: x0 = the BattleManagerUI, kept (a new battle starts the selector over)"
+      },
+      {
+        "gate": "ui_pre",
+        "offset": "0x27aa7f0",
+        "word": "a9bd7bfd",
+        "reason": "BattleManagerUI.set_selectedAllyDice entry: x0 = the BattleManagerUI, kept in case Init was missed"
+      }
+    ]
+  }
+}

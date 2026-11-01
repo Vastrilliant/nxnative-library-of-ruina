@@ -406,6 +406,22 @@ static void rec_start(void) {
     LOG("DM_REC: recording player 1's input to %s as DM_KEYS steps in presented frames", e);
 }
 
+// Keys a mod hides from the game for a while (mods/README.md, "Input"): dm_mod_input_mask(keys, ms) hides the keys of the dm_cheats_keys bit layout (buttons 0..15, the stick directions 16..23: the left
+// stick's four on 16..19, the right stick's on 20..23, which zero that stick's axes) from every read of the game's, for ms milliseconds from this call. A mod calls it again each frame it still wants them hidden, so
+// a mask nobody renews lapses by itself. dm_cheats_keys is not masked: the mod reads the real keys.
+static _Atomic uint64_t g_mod_mask, g_mod_until_ns;
+void dm_mod_input_mask(uint64_t keys, uint32_t ms) {
+    atomic_store(&g_mod_until_ns, now_ns() + (uint64_t)ms * 1000000ull);
+    atomic_store(&g_mod_mask, keys);
+}
+static void mod_mask_apply(uint64_t *b, int32_t a[4]) {
+    uint64_t m = atomic_load(&g_mod_mask);
+    if (!m) return;
+    if (now_ns() >= atomic_load(&g_mod_until_ns)) { atomic_store(&g_mod_mask, 0); return; }
+    *b &= ~(m & 0xffffull);
+    if (m & (0xFull << 16)) { a[0] = 0; a[1] = 0; }
+    if (m & (0xFull << 20)) { a[2] = 0; a[3] = 0; }
+}
 static void fill(NpadState *s, uint32_t id, uint32_t style) {
     memset(s, 0, sizeof *s);
     s->sampling = atomic_fetch_add(&g_sampling, 1) + 1;
@@ -428,6 +444,7 @@ static void fill(NpadState *s, uint32_t id, uint32_t style) {
         b |= atomic_load(&g_sc_btn) | atomic_exchange(&g_sc_latch, 0);
         uint64_t c = atomic_load(&g_sc_axes); for (int i = 0; i < 4; i++) a[i] = pick(a[i], ax(c, i));
     }
+    mod_mask_apply(&b, a);   // keys a mod hides (dm_mod_input_mask), after every source is merged
     s->lx = a[0]; s->ly = a[1]; s->rx = a[2]; s->ry = a[3];
     b &= 0xffffull;
     if (s->lx < -STICK_THRESH) b |= 1u << 16;

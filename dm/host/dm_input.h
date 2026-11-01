@@ -17,6 +17,8 @@ uint64_t dm_input_samples(void);   // Cumulative number of times the game has sa
 // merged axes' eight stick-direction bits (16..23), one flat bitset; no latches are consumed (the game's own reads
 // keep them). The NpadButton SL / SR bits (24 / 25) never fire: no input source of this host reports them
 uint64_t dm_cheats_keys(void);
+// Hides keys from the game's reads for ms milliseconds from the call (the dm_cheats_keys bit layout; hle_hid.c): for mods that take a key over while their own UI is open; renew it each frame, it lapses by itself. dm_cheats_keys still sees them
+void dm_mod_input_mask(uint64_t keys, uint32_t ms);
 // Physical controller path (Mac / iOS GameController): stored separately from keyboard / touch and scripted input (DM_KEYS / DM_CTL); when the game reads player 1,
 // buttons are ORed bitwise and each stick axis takes whichever source is deflected more. All 0 when no controller is connected.
 // dm_pad_set is player 1's controller (DM_BTN_SHAKE counts there only); dm_pad_set_player sets player n + 1's, which the game reads on its own npad (hle_hid.c) while
