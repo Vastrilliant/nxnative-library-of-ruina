@@ -2,7 +2,8 @@
 # The iOS launcher's settings for one game, from settings.tsv (its header describes the columns): the rows whose condition holds for the game, with the game's defaults, as JSON.
 # build_ipa.sh writes it into the app as dm/launcher.json; Launcher.swift draws the screen from it (an app without the file starts the game at once).
 # Usage: settings.py <game id> <rewritten modules dir> <control.nacp> <out.json>   (DM_GAMES_DIR finds provisional profiles, as in game.py; build:<VAR> defaults come from the environment;
-#   GFXAPI is the packer's graphics API, SETTINGS_PLATFORM the app's platform: ios (default) or mac, whose launcher is the Mac front end)
+#   GFXAPI is the packer's graphics API, SETTINGS_PLATFORM the app's platform: ios (default) or mac, whose launcher is the Mac front end;
+#   DM_MODS_SETTINGS names the file scripts/apply_mods.py writes: its switches are added last, under the section Mods, always off unless a mod's default says 1)
 import json, os, re, sys
 from pathlib import Path
 
@@ -11,6 +12,7 @@ sys.path.insert(0, str(HERE)); sys.path.insert(0, str(HERE.parent / 'tools'))
 import game, nacp
 
 SECTIONS = ('Game', 'Controls', 'Performance')   # headings on the single settings screen
+MODS_SECTION = 'Mods'   # the section of the mods' switches (mods/<id>/mod.json launcher, scripts/apply_mods.py); settings.tsv rows cannot use it
 SCHEMA = 1   # launcher.json's version (docs/launcher.schema.json); it grows only by optional fields, so a reader of 1 reads every 1
 # The meta column's keys, each with the pattern its value must match. A key is added here, in docs/frontends.md and in
 # docs/launcher.schema.json together (test_launcher_settings.py checks that the three agree); a reader ignores keys it does not know
@@ -49,6 +51,21 @@ def rows():
         if len(c) not in (7, 8, 9): sys.exit(f'settings.tsv:{n}: 7 to 9 columns expected, {len(c)} found')
         if c[5] not in SECTIONS: sys.exit(f'settings.tsv:{n}: unknown section: {c[5]}')
         yield n, c + [''] * (9 - len(c))
+
+
+def mod_rows(path, taken):
+    """The switches of the mods built into this app (DM_MODS_SETTINGS, written by scripts/apply_mods.py), as toggle rows under the Mods section: 1 on, 0 off, off unless the file says default 1"""
+    try: given = json.loads(Path(path).read_text(encoding='utf-8'))['settings']
+    except (OSError, ValueError, KeyError) as e: sys.exit(f'DM_MODS_SETTINGS {path}: cannot read the mods settings: {e}')
+    out = []
+    for r in given:
+        env = r.get('env', '')
+        if not re.fullmatch(r'DM_[A-Z0-9_]+', env): sys.exit(f'DM_MODS_SETTINGS: env {env!r} must match DM_[A-Z0-9_]+')
+        if env in taken or any(o['env'] == env for o in out): sys.exit(f'DM_MODS_SETTINGS: {env} is already a setting')
+        if not r.get('label'): sys.exit(f'DM_MODS_SETTINGS: {env} has no label')
+        out.append({'env': env, 'kind': 'toggle', 'section': MODS_SECTION, 'label': r['label'], 'note': r.get('note', ''),
+                    'default': '1' if r.get('default') == '1' else '0', 'on': '1', 'off': '0'})
+    return out
 
 
 def fixups_keys(path):   # '# KEY<TAB>value' header rows of a rewriter table
@@ -120,6 +137,7 @@ def build(gid, patched, control):
             s.update(on=on_off[0], off=on_off[1], default=on_off[0] if s['default'] == '1' else on_off[1])   # the default as the value the variable takes
         else: sys.exit(f'settings.tsv:{n}: unknown kind {kind}')
         out.append(s)
+    if os.environ.get('DM_MODS_SETTINGS'): out += mod_rows(os.environ['DM_MODS_SETTINGS'], {s['env'] for s in out})
     return {'schema': SCHEMA, 'game': g.id, 'settings': out}
 
 

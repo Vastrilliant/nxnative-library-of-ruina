@@ -4,7 +4,7 @@
 //   card_phase_pre    x0 = StageController                       (ApplyLibrarianCardPhase entry)
 //   dice_init_post    x23 = SpeedDiceUI, w27 = faction          (after the call of SpeedDiceUI.Init)
 //   dice_sprite_post  x19 = SpeedDiceUI, w20 = value (>= 999 only) (ChangeSprite's infinite-value path)
-// DM_MOD_SPEEDDICE=0 in env.txt turns the callbacks off (the gates stay in the code and pass through).
+// Off by default: DM_MOD_SPEEDDICE=1 turns the callbacks on (the launcher's Mods > Custom Speed Dice switch, or env.txt). The gates are always in the code and pass through while it is off.
 #include "dm.h"
 #include "hle_mods_gen.h"
 
@@ -702,14 +702,22 @@ static void dice_sprite_run(uint64_t *r, int param) {
     apply_infinite((void *)r[19], (int)(uint32_t)r[20]);
     if (first_hits(3)) LOG("[mod speed-dice] %s: SpeedDiceUI %#llx value %d", g_gate_name[3], (unsigned long long)r[19], (int)(uint32_t)r[20]);
 }
-static void on_stage_pre(uint64_t *r, int p) { dm_mod_gate_run(r, p, stage_pre_run); }
-static void on_card_phase_pre(uint64_t *r, int p) { dm_mod_gate_run(r, p, card_phase_run); }
-static void on_dice_init_post(uint64_t *r, int p) { dm_mod_gate_run(r, p, dice_init_run); }
-static void on_dice_sprite_post(uint64_t *r, int p) { dm_mod_gate_run(r, p, dice_sprite_run); }
+// Read once, at the first gate hit: the launcher's choices are in the environment by then, but not yet when constructors run
+static int mod_enabled(void) {
+    static int on = -1;
+    if (on < 0) {
+        const char *v = getenv("DM_MOD_SPEEDDICE");
+        on = v && v[0] == '1';
+        LOG("[mod speed-dice] %s (DM_MOD_SPEEDDICE=%s)", on ? "on" : "off", v ? v : "unset");
+    }
+    return on;
+}
+static void on_stage_pre(uint64_t *r, int p) { if (!mod_enabled()) return; dm_mod_gate_run(r, p, stage_pre_run); }
+static void on_card_phase_pre(uint64_t *r, int p) { if (!mod_enabled()) return; dm_mod_gate_run(r, p, card_phase_run); }
+static void on_dice_init_post(uint64_t *r, int p) { if (!mod_enabled()) return; dm_mod_gate_run(r, p, dice_init_run); }
+static void on_dice_sprite_post(uint64_t *r, int p) { if (!mod_enabled()) return; dm_mod_gate_run(r, p, dice_sprite_run); }
 
 __attribute__((constructor)) static void mod_speed_dice_attach(void) {
-    const char *off = getenv("DM_MOD_SPEEDDICE");
-    if (off && off[0] == '0') return;
     gate_obs_set(MODGATE_SPEED_DICE_STAGE_PRE, on_stage_pre);
     gate_obs_set(MODGATE_SPEED_DICE_DICE_INIT_POST, on_dice_init_post);
     gate_obs_set(MODGATE_SPEED_DICE_DICE_SPRITE_POST, on_dice_sprite_post);

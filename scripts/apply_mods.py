@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """Select the mods a build includes (mods/<id>/, see mods/README.md).
 
-    python3 scripts/apply_mods.py --mods speed-dice[,other] [--out DIR]
+    python3 scripts/apply_mods.py [--mods speed-dice[,other]] [--out DIR]
+
+Every mod in mods/ is built in unless --mods names a subset. A mod is off at run time until the player turns it on (the launcher's Mods section, or its env switch = 1).
 
 For the selected mods it
   - gives every gate in their mod.json an observation-gate number (32..63) and writes dm/host/hle_mods_gen.h with MODGATE_<MOD>_<GATE> defines;
   - copies each mod's host.c to dm/host/hle_mod_<id>.c (the host Makefile takes hle_*.c by wildcard; a mod attaches its callbacks from a constructor, as hle_svc.c does);
   - writes DIR/patches.json, the gates for the rewriter (dm/tools/patch_nso.py reads it through DM_MODS_PATCHES);
-  - merges the mods' romfs folders into DIR/romfs, the folder for DM_ROMFS_OVERLAY on the device.
-With no --mods it removes what an earlier run left. In GitHub Actions it also exports DM_MODS_PATCHES through $GITHUB_ENV.
+  - merges the mods' romfs folders into DIR/romfs, the folder for DM_ROMFS_OVERLAY on the device;
+  - writes DIR/launcher_mods.json, one off-by-default toggle per mod under the launcher section "Mods" (dm/games/settings.py adds it to the app's launcher.json when DM_MODS_SETTINGS names it).
+With --mods none it removes what an earlier run left. In GitHub Actions it also exports DM_MODS_PATCHES through $GITHUB_ENV.
 """
 import argparse, glob, json, os, re, shutil, sys
 
@@ -22,11 +25,13 @@ def ident(s): return re.sub(r'[^0-9A-Za-z]', '_', s).upper()
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--mods', default='', help='comma- or space-separated mod IDs (default: none)')
+    ap.add_argument('--mods', default='all', help="comma- or space-separated mod IDs, 'all' (default) or 'none'")
     ap.add_argument('--out', default=os.path.join(ROOT, 'build', 'mods'), help='where patches.json and romfs/ go')
     a = ap.parse_args()
-    want = [m for m in re.split(r'[,\s]+', a.mods.strip()) if m]
     have = available()
+    want = [m for m in re.split(r'[,\s]+', a.mods.strip()) if m]
+    if want == ['all']: want = have
+    elif want == ['none']: want = []
     bad = [m for m in want if m not in have]
     if bad: sys.exit(f'[RED] unknown mod {", ".join(bad)}; available: {", ".join(have) or "none"}')
     host = os.path.join(ROOT, 'dm', 'host')
@@ -36,7 +41,7 @@ def main():
     if not want:
         print('no mods selected'); return
     os.makedirs(a.out)
-    defs, obs, number = [], {}, FIRST_GATE
+    defs, obs, number, launcher = [], {}, FIRST_GATE, []
     for mid in sorted(set(want)):
         d = os.path.join(ROOT, 'mods', mid)
         with open(os.path.join(d, 'mod.json'), encoding='utf-8') as f: mod = json.load(f)
@@ -54,6 +59,11 @@ def main():
                 if not re.fullmatch(r'[0-9a-f]{8}', r['word']): sys.exit(f'[RED] {mid}: word {r["word"]!r} is not 8 hex digits')
                 obs.setdefault(bid, []).append([int(r['offset'], 0), nums[r['gate']] | int(r.get('param', 0)) << 8, r['word'], f'mod {mid}: {r.get("reason", r["gate"])}'])
                 n_rows += 1
+        lc = mod.get('launcher', {})
+        env = lc.get('env', f'DM_MOD_{ident(mid)}')
+        if not re.fullmatch(r'DM_[A-Z0-9_]+', env): sys.exit(f'[RED] {mid}: launcher env {env!r} must match DM_[A-Z0-9_]+')
+        launcher.append({'env': env, 'kind': 'toggle', 'section': 'Mods', 'label': lc.get('label', mod.get('title', mid)),
+                         'note': lc.get('note', mod.get('description', '')), 'default': '0', 'on': '1', 'off': '0'})
         shutil.copyfile(os.path.join(d, mod['host']), os.path.join(host, f'hle_mod_{ident(mid).lower()}.c'))
         romfs = os.path.join(d, mod.get('romfs', 'romfs'))
         if os.path.isdir(romfs):
@@ -65,8 +75,10 @@ def main():
     pj = os.path.abspath(os.path.join(a.out, 'patches.json'))
     with open(pj, 'w', encoding='utf-8') as f: json.dump({'OBS': obs}, f, indent=1)
     os.makedirs(os.path.join(a.out, 'romfs'), exist_ok=True)
-    print(f'DM_MODS_PATCHES={pj}')
+    ls = os.path.abspath(os.path.join(a.out, 'launcher_mods.json'))
+    with open(ls, 'w', encoding='utf-8') as f: json.dump({'settings': launcher}, f, indent=1, ensure_ascii=False)
+    print(f'DM_MODS_PATCHES={pj}\nDM_MODS_SETTINGS={ls}')
     if os.environ.get('GITHUB_ENV'):
-        with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as f: f.write(f'DM_MODS_PATCHES={pj}\n')
+        with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as f: f.write(f'DM_MODS_PATCHES={pj}\nDM_MODS_SETTINGS={ls}\n')
 
 if __name__ == '__main__': main()
