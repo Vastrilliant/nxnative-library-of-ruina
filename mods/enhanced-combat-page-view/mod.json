@@ -1,7 +1,7 @@
 {
   "id": "enhanced-combat-page-view",
   "title": "Enhanced Combat Page View",
-  "description": "Port of Cyaminthe's Enhanced Combat Page View (Workshop 2802216129) as host callbacks on observation gates: the selected combat page in the hand is zoomed (25% bigger by default). For Library of Ruina 1.0.3.",
+  "description": "Port of Cyaminthe's Enhanced Combat Page View (Workshop 2802216129) as a host callback on an observation gate: the combat pages in the hand are zoomed (25% bigger by default). For Library of Ruina 1.0.3.",
   "launcher": {
     "env": "DM_MOD_ECPV",
     "label": "Enhanced Combat Page View",
@@ -11,8 +11,8 @@
     {
       "env": "DM_MOD_ECPV_ZOOM",
       "kind": "range",
-      "label": "Selected page zoom (%)",
-      "note": "How much bigger the selected combat page is. 125 is 25% bigger.",
+      "label": "Page zoom (%)",
+      "note": "How much bigger the combat pages in your hand are. 125 is 25% bigger.",
       "default": "125",
       "min": 100,
       "max": 175,
@@ -21,10 +21,6 @@
   ],
   "game": "Library of Ruina 1.0.3",
   "gates": [
-    "show_pre",
-    "hide_pre",
-    "vibe_pre",
-    "setcard_pre",
     "update_pre"
   ],
   "host": "host.c",
@@ -32,34 +28,10 @@
     "_comment": "main build ID -> rows {gate, offset, word, reason}; offsets are RVAs of dump.cs (main = RVA + 0x234000 in the DmIOS file).",
     "aeea627ddbd1214764dfef5f965e94a2": [
       {
-        "gate": "show_pre",
-        "offset": "0x1fd6d10",
-        "word": "6dbb2beb",
-        "reason": "BattleDiceCardUI.ShowDetail entry: x0 = the card"
-      },
-      {
-        "gate": "hide_pre",
-        "offset": "0x1fd71f0",
-        "word": "6dbb2beb",
-        "reason": "BattleDiceCardUI.HideDetail entry: x0 = the card"
-      },
-      {
-        "gate": "vibe_pre",
-        "offset": "0x1fd6c20",
-        "word": "a9bd7bfd",
-        "reason": "BattleDiceCardUI.PlayVibeCard entry: x0 = the card"
-      },
-      {
-        "gate": "setcard_pre",
-        "offset": "0x1fd8300",
-        "word": "6db82beb",
-        "reason": "BattleDiceCardUI.SetCard entry: x0 = the card, x1 = the new model"
-      },
-      {
         "gate": "update_pre",
         "offset": "0x1fdf230",
         "word": "a9bd7bfd",
-        "reason": "BattleUnitCardsInHandUI.Update entry (once a frame): x0 = the hand; _selectedCard at 0x60"
+        "reason": "BattleUnitCardsInHandUI.Update entry (once a frame): x0 = the hand; _cardList at 0x18"
       }
     ]
   }
