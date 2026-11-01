@@ -4,6 +4,7 @@
 //   update_pre  LevelUpUI.Update entry (x0 = the LevelUpUI, once a frame while the UI is active): on a new press of R3 (dm_cheats_keys, every input source: physical controller, touch pad, keyboard)
 //               while the Abnormality Page pick is showing and nothing is picked yet, re-roll and start the pick again
 //   pick_pre    StageLibraryFloorModel.StartPickEmotionCard entry (x0 = the floor model): remembered, to start the pick again from update_pre
+// Before the pick starts again, the pick screen's background loop (LevelUpUI._loopSound) is released and cleared: the game only releases it on a pick or on hiding, so a re-roll used to leave the old loop playing for about a minute.
 // The re-roll is the PC mod's: for each alive unit of the player's faction with n coins in emotionDetail.totalEmotionCoins, a random number from 1 to n of them become positive and the rest negative.
 // The PC mod fills the list with two shared coin objects; here the coins already in the list change their type in place (EmotionCoin._coinType), so nothing is allocated on the managed heap.
 // Off by default: DM_MOD_REEXTRACTION=1 turns the callbacks on (the launcher's Mods > Re-Extraction switch, or env.txt). The gates are always in the code and pass through while it is off.
@@ -18,8 +19,10 @@ void dm_mod_gate_run(uint64_t *regs, int param, void (*fn)(uint64_t *, int));
 #define K_BATTLEOBJMGR_GET_INSTANCE 0x28807A0u     // BattleObjectManager.get_instance
 #define K_BATTLEOBJMGR_GET_ALIVE_LIST_FACTION 0x2885570u
 #define K_BATTLEUNIT_GET_EMOTIONDETAIL 0x1EEFAA0u  // BattleUnitModel.get_emotionDetail
+#define K_BATTLEEFFECTSOUND_RELEASE 0x1E8B5D0u     // BattleEffectSound.Release
 
 #define FACTION_PLAYER 1                           // Faction: Enemy 0, Player 1
+#define F_LEVELUPUI_LOOP_SOUND 0x130               // LevelUpUI._loopSound (BattleEffectSound): the pick screen's background loop
 #define F_LEVELUPUI_SELECTED_CARD 0x158            // LevelUpUI.selectedCard (bool): a page has been picked
 #define F_LEVELUPUI_IS_EGO 0x159                   // LevelUpUI._isEgo (bool): the EGO pick, not the Abnormality Page pick
 #define F_EMOTIONDETAIL_TOTAL_COINS 0x18           // BattleUnitEmotionDetail.totalEmotionCoins (List<EmotionCoin>)
@@ -93,6 +96,12 @@ static void update_run(uint64_t *r, int param) {
     if (!ui || !s_floor) return;
     if (!(FN(K_LEVELUPUI_GET_ISENABLED, int, void *, const void *)(ui, NULL) & 1)) return;   // the pick UI is not showing
     if (field_bool(ui, F_LEVELUPUI_SELECTED_CARD) || field_bool(ui, F_LEVELUPUI_IS_EGO)) return;   // a page is already picked, or it is the EGO pick
+    // The game releases _loopSound when a page is picked (OnSelectPassive) or the UI hides; starting the pick again makes a new loop and overwrites the field, so the old loop would play on with nobody left to stop it. Release it first and clear the field
+    void *loop = field(ui, F_LEVELUPUI_LOOP_SOUND);
+    if (loop) {
+        FN(K_BATTLEEFFECTSOUND_RELEASE, void, void *, const void *)(loop, NULL);
+        *(void **)((uintptr_t)ui + F_LEVELUPUI_LOOP_SOUND) = NULL;
+    }
     int units = reroll_coins();
     FN(K_STAGELIBFLOOR_START_PICK_EMOTION_CARD, void, void *, const void *)(s_floor, NULL);
     if (first_hits(0)) LOG("[mod re-extraction] R3: coins of %d unit(s) re-rolled, pick %#llx started again", units, (unsigned long long)(uintptr_t)s_floor);

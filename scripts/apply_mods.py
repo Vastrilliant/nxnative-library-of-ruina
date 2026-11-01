@@ -124,6 +124,15 @@ def main():
         if not re.fullmatch(r'DM_[A-Z0-9_]+', env): sys.exit(f'[RED] {mid}: launcher env {env!r} must match DM_[A-Z0-9_]+')
         launcher.append({'env': env, 'kind': 'toggle', 'section': 'Mods', 'label': lc.get('label', mod.get('title', mid)),
                          'note': lc.get('note', mod.get('description', '')), 'default': '0', 'on': '1', 'off': '0'})
+        for st in mod.get('settings', []):
+            if not re.fullmatch(r'DM_[A-Z0-9_]+', st.get('env', '')): sys.exit(f'[RED] {mid}: setting env {st.get("env")!r} must match DM_[A-Z0-9_]+')
+            kind = st.get('kind', 'toggle')
+            if kind not in ('toggle', 'range', 'choice'): sys.exit(f'[RED] {mid}: setting {st["env"]} has kind {kind!r}')
+            row = {'env': st['env'], 'kind': kind, 'section': 'Mods', 'label': st['label'], 'note': st.get('note', ''), 'default': str(st.get('default', '0')), 'needs': f'{env}=1'}
+            if kind == 'toggle': row.update({'on': '1', 'off': '0'})
+            elif kind == 'range': row.update({k: st[k] for k in ('min', 'max', 'step')})
+            else: row['options'] = st['options']
+            launcher.append(row)
         if mod.get('host'): shutil.copyfile(os.path.join(d, mod['host']), os.path.join(host, f'hle_mod_{ident(mid).lower()}.c'))
         n_sw = 0
         if mod.get('exefs'):

@@ -63,8 +63,12 @@ def mod_rows(path, taken):
         if not re.fullmatch(r'DM_[A-Z0-9_]+', env): sys.exit(f'DM_MODS_SETTINGS: env {env!r} must match DM_[A-Z0-9_]+')
         if env in taken or any(o['env'] == env for o in out): sys.exit(f'DM_MODS_SETTINGS: {env} is already a setting')
         if not r.get('label'): sys.exit(f'DM_MODS_SETTINGS: {env} has no label')
-        out.append({'env': env, 'kind': 'toggle', 'section': MODS_SECTION, 'label': r['label'], 'note': r.get('note', ''),
-                    'default': '1' if r.get('default') == '1' else '0', 'on': '1', 'off': '0'})
+        kind = r.get('kind', 'toggle')
+        row = {'env': env, 'kind': kind, 'section': MODS_SECTION, 'label': r['label'], 'note': r.get('note', '')}
+        if kind == 'toggle': row.update({'default': '1' if r.get('default') == '1' else '0', 'on': '1', 'off': '0'})
+        else: row.update({k: r[k] for k in ('default', 'min', 'max', 'step', 'options') if k in r})
+        if r.get('needs'): row['needs'] = r['needs']
+        out.append(row)
     return out
 
 
