@@ -21,6 +21,10 @@
   ],
   "game": "Library of Ruina 1.0.3",
   "gates": [
+    "show_pre",
+    "hide_pre",
+    "vibe_pre",
+    "setcard_pre",
     "update_pre"
   ],
   "host": "host.c",
@@ -28,10 +32,34 @@
     "_comment": "main build ID -> rows {gate, offset, word, reason}; offsets are RVAs of dump.cs (main = RVA + 0x234000 in the DmIOS file).",
     "aeea627ddbd1214764dfef5f965e94a2": [
       {
+        "gate": "show_pre",
+        "offset": "0x1fd6d10",
+        "word": "6dbb2beb",
+        "reason": "BattleDiceCardUI.ShowDetail entry: x0 = the card"
+      },
+      {
+        "gate": "hide_pre",
+        "offset": "0x1fd71f0",
+        "word": "6dbb2beb",
+        "reason": "BattleDiceCardUI.HideDetail entry: x0 = the card"
+      },
+      {
+        "gate": "vibe_pre",
+        "offset": "0x1fd6c20",
+        "word": "a9bd7bfd",
+        "reason": "BattleDiceCardUI.PlayVibeCard entry: x0 = the card"
+      },
+      {
+        "gate": "setcard_pre",
+        "offset": "0x1fd8300",
+        "word": "6db82beb",
+        "reason": "BattleDiceCardUI.SetCard entry: x0 = the card, x1 = the new model"
+      },
+      {
         "gate": "update_pre",
         "offset": "0x1fdf230",
         "word": "a9bd7bfd",
-        "reason": "BattleUnitCardsInHandUI.Update entry (once a frame): x0 = the hand; _selectedCard at 0x60 says which page is selected"
+        "reason": "BattleUnitCardsInHandUI.Update entry (once a frame): x0 = the hand; _selectedCard at 0x60"
       }
     ]
   }
