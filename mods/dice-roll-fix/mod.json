@@ -5,7 +5,7 @@
   "launcher": {
     "env": "DM_MOD_DICEROLLFIX",
     "label": "Speed Dice Fix",
-    "note": "Optimizes LoR’s Dice Roll functions to be more efficient, original mod by [uGuardian’s Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=2797351574)"
+    "note": "Optimizes LoR’s Dice Roll functions to be more efficient. Original mod by [uGuardian’s Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=2797351574)"
   },
   "game": "Library of Ruina 1.0.3",
   "exefs": "exefs",

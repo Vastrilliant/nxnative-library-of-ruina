@@ -5,7 +5,7 @@
   "launcher": {
     "env": "DM_MOD_NOGRIND",
     "label": "No Grind",
-    "note": "Modifies the game to drop virtually infinite books & combat pages, original mod by [uGuardian’s Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=2673646927)"
+    "note": "Modifies the game to drop virtually infinite books & combat pages. Original mod by [uGuardian’s Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=2673646927)"
   },
   "game": "Library of Ruina 1.0.3",
   "exefs": "exefs",

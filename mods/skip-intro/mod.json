@@ -5,7 +5,7 @@
   "launcher": {
     "env": "DM_MOD_SKIPINTRO",
     "label": "Skip Intro",
-    "note": "Automatically skips the AMV on startup, original mod by trilliance"
+    "note": "Automatically skips the AMV on startup. Original mod by trilliance"
   },
   "game": "Library of Ruina 1.0.3",
   "exefs": "exefs",

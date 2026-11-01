@@ -5,7 +5,7 @@
   "launcher": {
     "env": "DM_MOD_PATTYOPT",
     "label": "Patty Optimization",
-    "note": "Several Unity-engine based optimization fixes, original mod by [PattyHoswell’s NexusMods page](https://www.nexusmods.com/libraryofruina/mods/174)"
+    "note": "Several Unity-engine based optimization fixes. Original mod by [PattyHoswell’s NexusMods page](https://www.nexusmods.com/libraryofruina/mods/174)"
   },
   "game": "Library of Ruina 1.0.3",
   "exefs": "exefs",

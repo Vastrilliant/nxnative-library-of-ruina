@@ -11,6 +11,7 @@
 //    - ZL / ZR         top-right
 //    - X / Y           on the 2/3 line down the screen
 //    - - / +           centred in the bottom third
+//    - L3 / R3         bottom-left / bottom-right (the stick clicks). R3 is the "special" button of the mods (mods/README.md): vanilla games do not use it, so a mod can claim it
 //    - Right stick     middle-left toggle. While on, swipes move the right stick instead of the D-pad (tap = A and hold = B still work)
 //    - Swipe lock      middle-right toggle. Locked = one D-pad press per swipe, unlocked = several presses per swipe
 //
@@ -24,18 +25,19 @@ import UIKit
 /// The buttons this layout presses. The raw values are the nn::hid::NpadButton bits of dm_input.h (DM_BTN_*).
 enum PadButton: UInt64 {
     case a = 0x1, b = 0x2, x = 0x4, y = 0x8
+    case leftStick = 0x10, rightStick = 0x20
     case leftShoulder = 0x40, rightShoulder = 0x80, leftTrigger = 0x100, rightTrigger = 0x200
     case plus = 0x400, minus = 0x800
     case dPadLeft = 0x1000, dPadUp = 0x2000, dPadRight = 0x4000, dPadDown = 0x8000
 
-    static let all: [PadButton] = [.a, .b, .x, .y, .leftShoulder, .rightShoulder, .leftTrigger, .rightTrigger, .plus, .minus,
+    static let all: [PadButton] = [.a, .b, .x, .y, .leftStick, .rightStick, .leftShoulder, .rightShoulder, .leftTrigger, .rightTrigger, .plus, .minus,
                                    .dPadLeft, .dPadUp, .dPadRight, .dPadDown]
 }
 
 // MARK: - Layout model
 
 enum GestureControlID: String, CaseIterable, Codable {
-    case l, r, zl, zr, x, y, minus, plus, stick, lock
+    case l, r, zl, zr, x, y, minus, plus, stick, lock, l3, r3
 
     var title: String {
         switch self {
@@ -49,6 +51,8 @@ enum GestureControlID: String, CaseIterable, Codable {
         case .plus: return "+"
         case .stick: return "Right Stick"
         case .lock: return "Swipe Lock"
+        case .l3: return "L3"
+        case .r3: return "R3"
         }
     }
 }
@@ -316,6 +320,8 @@ final class GestureControllerUIView: UIView {
         ControlView(id: .y, kind: .button(.y), title: "Y", circle: true),
         ControlView(id: .minus, kind: .button(.minus), title: "−", circle: false),
         ControlView(id: .plus, kind: .button(.plus), title: "+", circle: false),
+        ControlView(id: .l3, kind: .button(.leftStick), title: "L3", circle: true),
+        ControlView(id: .r3, kind: .button(.rightStick), title: "R3", circle: true),
         ControlView(id: .stick, kind: .stickToggle, title: "RS", circle: true, symbol: "r.joystick"),
         lockControl
     ]
@@ -447,7 +453,10 @@ final class GestureControllerUIView: UIView {
             // Right stick toggle: middle-left
             .stick: CGPoint(x: leftEdge + circle.width / 2, y: h / 2),
             // Swipe lock toggle: middle-right
-            .lock: CGPoint(x: rightEdge - circle.width / 2, y: h / 2)
+            .lock: CGPoint(x: rightEdge - circle.width / 2, y: h / 2),
+            // L3 & R3 (the stick clicks): bottom corners, level with - / +
+            .l3: CGPoint(x: leftEdge + circle.width / 2, y: h * 5 / 6),
+            .r3: CGPoint(x: rightEdge - circle.width / 2, y: h * 5 / 6)
         ]
     }
 

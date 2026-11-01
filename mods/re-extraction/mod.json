@@ -1,0 +1,33 @@
+{
+  "id": "re-extraction",
+  "title": "Re-Extraction (Library of Ruina)",
+  "description": "Port of qzwxecrv's Re-Extraction (Workshop 2748648361) as host callbacks on observation gates: while the Abnormality Page pick is open, the special button R3 re-rolls the emotion coins of the player's units and starts the pick again. For Library of Ruina 1.0.3.",
+  "launcher": {
+    "env": "DM_MOD_REEXTRACTION",
+    "label": "Re-Extraction",
+    "note": "Gives you the ability to re-roll Abnormality Pages by pressing R3. Original mod by [qzwxecrv’s Steam Workshop](https://steamcommunity.com/workshop/filedetails/?id=2748648361)"
+  },
+  "game": "Library of Ruina 1.0.3",
+  "gates": [
+    "update_pre",
+    "pick_pre"
+  ],
+  "host": "host.c",
+  "obs": {
+    "_comment": "main build ID (first 16 bytes of the module ID, 32 hex digits) -> rows {gate, offset, word, reason}; word = the 4 bytes at offset read as a little-endian u32. Offsets are the RVAs of dump.cs (main = RVA + 0x234000 in the DmIOS file).",
+    "aeea627ddbd1214764dfef5f965e94a2": [
+      {
+        "gate": "update_pre",
+        "offset": "0x1e1f7f0",
+        "word": "fc1b0fec",
+        "reason": "LevelUpUI.Update entry (once a frame while the pick UI is active): x0 = the LevelUpUI"
+      },
+      {
+        "gate": "pick_pre",
+        "offset": "0x1d209e0",
+        "word": "a9be7bfd",
+        "reason": "StageLibraryFloorModel.StartPickEmotionCard entry: x0 = the floor model, kept to start the pick again"
+      }
+    ]
+  }
+}

@@ -5,7 +5,7 @@
   "launcher": {
     "env": "DM_MOD_SPEEDDICE",
     "label": "Custom Speed Dice",
-    "note": "Faction-based custom speed dices, original mod by [PattyHoswell’s Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=2746914901)"
+    "note": "Faction-based custom speed dices. Original mod by [PattyHoswell’s Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=2746914901)"
   },
   "game": "Library of Ruina 1.0.3",
   "gates": [

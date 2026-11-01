@@ -1,0 +1,39 @@
+{
+  "id": "counter-dice-retain",
+  "title": "Retain Counter Dice (Library of Ruina)",
+  "description": "Port of XDTM's Counter Dice Retain (Workshop 2787425839) as host callbacks on observation gates: a counter (Standby) die is not used up and keeps answering further attacks until it loses a clash, as in Early Access. For Library of Ruina 1.0.3.",
+  "launcher": {
+    "env": "DM_MOD_COUNTERDICERETAIN",
+    "label": "Retain Counter Dice",
+    "note": "Counter Dices are kept and used against multiple attacks until it loses a clash, just like how it worked during Early Access. Original mod by [XDTM’s Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=2787425839)"
+  },
+  "game": "Library of Ruina 1.0.3",
+  "gates": [
+    "after_action_pre",
+    "win_parry_pre"
+  ],
+  "host": "host.c",
+  "obs": {
+    "_comment": "main build ID (first 16 bytes of the module ID, 32 hex digits) -> rows {gate, offset, word, reason}; word = the 4 bytes at offset read as a little-endian u32. Offsets are the RVAs of dump.cs (main = RVA + 0x234000 in the DmIOS file). The three rows are the entries of the three methods the PC mod patches with Harmony prefixes; x0 = the BattlePlayingCardDataInUnitModel.",
+    "aeea627ddbd1214764dfef5f965e94a2": [
+      {
+        "gate": "win_parry_pre",
+        "offset": "0x1b2b4a0",
+        "word": "a9be7bfd",
+        "reason": "BattlePlayingCardDataInUnitModel.OnWinParryingAttack entry: x0 = the card"
+      },
+      {
+        "gate": "win_parry_pre",
+        "offset": "0x1b2b500",
+        "word": "a9be7bfd",
+        "reason": "BattlePlayingCardDataInUnitModel.OnWinParryingDefense entry: x0 = the card"
+      },
+      {
+        "gate": "after_action_pre",
+        "offset": "0x1b2b560",
+        "word": "a9be7bfd",
+        "reason": "BattlePlayingCardDataInUnitModel.AfterAction entry: x0 = the card"
+      }
+    ]
+  }
+}
