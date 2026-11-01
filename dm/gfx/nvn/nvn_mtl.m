@@ -1905,6 +1905,10 @@ static MTLTextureUsage img_usage(const tex_t *t, MTLPixelFormat pf) {
 // Metal leaves MTLTextureUsageShaderAtomic out of a texture's usage property (0x3 for a texture made with 0x23), so it cannot be read back: every shader-writable R32Uint / R32Sint
 // texture the host makes has it (img_usage, tex_upgrade, dummy_img_atomic), and that is what this tests
 static int tex_atomic_capable(id<MTLTexture> base) { return pf_r32i(base.pixelFormat) && (base.usage & MTLTextureUsageShaderWrite); }
+// DM_NVN_MSAA_CAP=1: multisample textures (NVN targets 5 and 6) are made as single-sample 2D / 2D array textures, so every pass drawing into them is single-sample (the pass and pipeline sample counts come from
+// the attachments). Library of Ruina's High quality renders its 1080p RGBA16F scene target at 2x MSAA in three passes that each load and store it; on an A15 that is the GPU time lost. Downsample from and to equal
+// sample counts is a plain copy (the DM_COPY_RESOLVE branch of the copy replay). Off by default.
+static int msaa_cap_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_NVN_MSAA_CAP"); v = e && atoi(e) == 1; if (v) MLOG("DM_NVN_MSAA_CAP=1: multisample textures are made single-sample"); } return v; }
 static MTLTextureDescriptor *tex_desc(const tex_t *t, int packaged) {
     uint32_t pf = 0; uint8_t swz[4];
     if (!nvn_fmt_to_mtl(t->d.format, &pf, swz) || !pf) { RED_ONCE(0, "texture format %#x has no Metal equivalent (first case)", t->d.format); return nil; }
@@ -1921,8 +1925,8 @@ static MTLTextureDescriptor *tex_desc(const tex_t *t, int packaged) {
         case 2: d.textureType = MTLTextureType3D; d.depth = t->d.depth; break;
         case 3: d.textureType = MTLTextureType2DArray; d.arrayLength = t->d.height; d.height = 1; break;
         case 4: d.textureType = MTLTextureType2DArray; d.arrayLength = t->d.depth; break;
-        case 5: d.textureType = MTLTextureType2DMultisample; d.sampleCount = t->d.samples; d.mipmapLevelCount = 1; break;
-        case 6: d.textureType = MTLTextureType2DMultisampleArray; d.sampleCount = t->d.samples; d.arrayLength = t->d.depth; d.mipmapLevelCount = 1; break;
+        case 5: if (msaa_cap_on()) { d.textureType = MTLTextureType2D; d.mipmapLevelCount = 1; break; } d.textureType = MTLTextureType2DMultisample; d.sampleCount = t->d.samples; d.mipmapLevelCount = 1; break;
+        case 6: if (msaa_cap_on()) { d.textureType = MTLTextureType2DArray; d.arrayLength = t->d.depth; d.mipmapLevelCount = 1; break; } d.textureType = MTLTextureType2DMultisampleArray; d.sampleCount = t->d.samples; d.arrayLength = t->d.depth; d.mipmapLevelCount = 1; break;
         // Cube textures are created as 6-layer 2D arrays and sampled through cube / cube array views made by tex_fit: Metal only allows cube array views of a 2D array base texture (not of a cube base).
         // The Legend of Zelda: Breath of the Wild has 1512 shaders that sample the environment light probes as a cube array while a single cube texture is bound (texture ID 1064 onwards): with mismatched types the reads are undefined, and every lit surface came out black
         case 8: d.textureType = MTLTextureType2DArray; d.arrayLength = 6; break;
